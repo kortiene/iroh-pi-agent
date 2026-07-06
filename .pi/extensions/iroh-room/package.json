@@ -1,0 +1,28 @@
+{
+	"name": "iroh-room-pi-extension",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"description": "Project-local Pi extension exposing iroh-room tools and slash commands backed by the iroh-rooms CLI.",
+	"pi": {
+		"extensions": ["./index.ts"]
+	},
+	"scripts": {
+		"typecheck": "tsc -p tsconfig.json --noEmit",
+		"test": "node --test test/*.test.mjs"
+	},
+	"peerDependencies": {
+		"@earendil-works/pi-ai": "*",
+		"@earendil-works/pi-coding-agent": "*",
+		"typebox": "*"
+	},
+	"peerDependenciesMeta": {
+		"@earendil-works/pi-ai": { "optional": true },
+		"@earendil-works/pi-coding-agent": { "optional": true },
+		"typebox": { "optional": true }
+	},
+	"devDependencies": {
+		"@types/node": "^22.0.0",
+		"typescript": "^5.9.0"
+	}
+}

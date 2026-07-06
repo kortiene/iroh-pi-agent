@@ -1,0 +1,11 @@
+# Local room/agent state — never commit identities or event stores
+.iroh/
+*.secret
+
+# Local harness config may carry machine paths and member ids; commit the .example instead
+.iroh-room-pi.json
+
+# Agent-produced artifacts staged for file share
+artifacts/
+
+node_modules/

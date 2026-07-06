@@ -1,0 +1,34 @@
+{
+	// Typecheck-only config (noEmit): at runtime pi loads this extension raw
+	// via jiti and aliases @earendil-works/* and typebox to its bundled
+	// packages, so the paths below only serve tsc. They point at the CURRENT
+	// global pi install; update them if the node/pi version changes.
+	"compilerOptions": {
+		"target": "ES2022",
+		"lib": ["ES2022"],
+		"module": "NodeNext",
+		"moduleResolution": "NodeNext",
+		"types": ["node"],
+		"strict": true,
+		"noUncheckedIndexedAccess": true,
+		"verbatimModuleSyntax": true,
+		"isolatedModules": true,
+		"forceConsistentCasingInFileNames": true,
+		"skipLibCheck": true,
+		"noEmit": true,
+		"allowImportingTsExtensions": true,
+		"baseUrl": ".",
+		"paths": {
+			"@earendil-works/pi-coding-agent": [
+				"/Users/sekou/.asdf/installs/nodejs/22.22.3/lib/node_modules/@earendil-works/pi-coding-agent/dist/index.d.ts"
+			],
+			"@earendil-works/pi-ai": [
+				"/Users/sekou/.asdf/installs/nodejs/22.22.3/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/index.d.ts"
+			],
+			"typebox": [
+				"/Users/sekou/.asdf/installs/nodejs/22.22.3/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/typebox/build/index.d.mts"
+			]
+		}
+	},
+	"include": ["index.ts", "src/**/*.ts"]
+}

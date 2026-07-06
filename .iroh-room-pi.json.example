@@ -1,0 +1,12 @@
+{
+  "room_id": "blake3:0000000000000000000000000000000000000000000000000000000000000000",
+  "iroh_rooms_home": ".iroh/agent",
+  "iroh_rooms_bin": "/Users/sekou/TAC/iroh-room/target/release/iroh-rooms",
+  "agent_name": "pi-agent",
+  "artifact_dir": "artifacts",
+  "default_progress": 0,
+  "default_preview_host": "127.0.0.1",
+  "default_preview_port": 3000,
+  "allowed_preview_members": [],
+  "allow_artifact_paths_outside_workspace": false
+}
