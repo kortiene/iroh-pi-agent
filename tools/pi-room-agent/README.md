@@ -14,7 +14,7 @@ transitions, and share final artifacts.
 | `src/task-parser.ts` | REAL + tested. Canonical hand-rolled parser for the ` ```room-task ` YAML subset; never throws, returns `{tasks, errors}`. |
 | `src/status-mapper.ts` | REAL + tested. Pure fold from Pi RPC events to `agent.status` transitions + `STATUS_VOCABULARY`. |
 | `src/room-cli.ts` | REAL. Pure argv builders + stdout parsers (fixture-tested against the exact iroh-rooms 0.1.0 output formats) + secret redaction. The `spawnSync` runner is intentionally thin and untested. |
-| `src/main.ts` | SCAFFOLD. Arg parsing, config load, identity verify, poll-diff tail loop, task detection, claim plumbing all work; the Pi drive is a TODO stub (posts `blocked` after claiming so the room sees an honest signal). |
+| `src/main.ts` | SCAFFOLD, tested orchestration. Arg parsing, config load, identity verify, poll-diff tail loop (mandatory startup priming with retry), task detection, claim plumbing all work and are covered by `test/main.test.ts` via an injected runner; the Pi drive is a TODO stub (posts `blocked` after claiming so the room sees an honest signal). Import-safe: `main()` only runs when executed directly. |
 | `src/pi-rpc.ts` | SCAFFOLD. Protocol-correct JSONL client for `pi --mode rpc --no-session -a` (StringDecoder + manual `\n` scan — Node readline is not RPC-compliant). Compiles; not exercised end-to-end. |
 | `src/preview-pipe.ts` | SCAFFOLD. Background `pipe expose` supervisor (resolve on `pipe_id:`, SIGINT→SIGKILL close, registry). Compiles; not exercised end-to-end. |
 | `src/artifact-publisher.ts` | SCAFFOLD. Fail-closed artifact path validation (exists, regular file, ≤100 MiB, symlink-resolved workspace containment) + `file share` round-trip. Compiles; not exercised end-to-end. |
@@ -26,8 +26,10 @@ npm install        # devDeps only (typescript, vitest, tsx, @types/node)
 npm run typecheck
 npm test
 
-# no network, prints planned CLI argv (offline tail read runs if a binary is configured):
-npm start -- --once --dry-run
+# no network, prints planned CLI argv (offline tail read runs if a binary is
+# configured). Fails closed without a room id — pass --room, set IROH_ROOM_ID,
+# or run in a directory whose .iroh-room-pi.json sets room_id:
+npm start -- --room blake3:<64-hex> --once --dry-run
 
 # one real poll iteration (requires room id + identity + iroh-rooms binary):
 npm start -- --once
@@ -59,8 +61,10 @@ config file, or invalid inputs produce clear errors and nothing is sent.
 
 - The only integration surface is the `iroh-rooms` CLI (no protocol changes,
   AC11). There is no live JSON tail in iroh-rooms 0.1.0, so the loop is
-  poll-diff: `room tail <ROOM> --offline --json --limit 200` every N seconds,
-  keyed on the set of seen `event_id`s.
+  poll-diff: `room tail --offline --json --limit=200 -- <ROOM>` every N
+  seconds, keyed on the set of seen `event_id`s. All argv uses equals-form
+  options and a literal `--` before positionals so untrusted values starting
+  with `-` are never parsed as flags.
 - Pi is driven over RPC (`pi --mode rpc --no-session -a`); `-a`/`--approve` is
   required headlessly or the project's `.pi/` extension/skills/prompts are
   silently ignored (trust is never prompted in non-interactive modes).

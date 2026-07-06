@@ -1,6 +1,6 @@
 /**
- * SCAFFOLD — pi-room-agent headless worker entry point (SPEC.md §15,
- * DESIGN.md §7). Compiles and runs end-to-end WITHOUT network:
+ * pi-room-agent headless worker entry point (SPEC.md §15, DESIGN.md §7).
+ * Compiles and runs end-to-end WITHOUT network:
  *
  *   npm start -- --once --dry-run     # print planned CLI argv, no sends
  *   npm start -- --once               # one real poll iteration
@@ -15,9 +15,15 @@
  * sketched below (see driveTaskWithPi) but not enabled; after claiming, the
  * worker posts `blocked` so humans in the room can see the claim is not
  * progressing. See README "next steps".
+ *
+ * The module is import-safe: main() only runs when the file is executed
+ * directly (entry-point guard below), so tests can import pollOnce/
+ * primeSeenEvents/parseCliArgs without side effects.
  */
 
+import { realpathSync } from 'node:fs';
 import { setTimeout as sleep } from 'node:timers/promises';
+import { pathToFileURL } from 'node:url';
 
 import { ConfigError, requireRoomId, resolveIrohRoomsBin, resolveWorkerConfig, type ResolvedWorkerConfig } from './config.js';
 import {
@@ -25,6 +31,8 @@ import {
   buildIdentityShowArgs,
   buildRoomSendArgs,
   buildRoomTailArgs,
+  MAX_MESSAGE_BODY_BYTES,
+  MAX_STATUS_MESSAGE_BYTES,
   parseCodedError,
   parseIdentityShow,
   parseSendEventId,
@@ -32,6 +40,7 @@ import {
   parseTailRows,
   redact,
   runIrohRooms,
+  type Captured,
   type CliContext,
   type TailRow,
 } from './room-cli.js';
@@ -54,7 +63,7 @@ Options:
   --help                     Show this help
 `;
 
-interface CliArgs {
+export interface CliArgs {
   room?: string;
   dataDir?: string;
   once: boolean;
@@ -118,13 +127,20 @@ export function parseCliArgs(argv: readonly string[]): CliArgs {
 
 const TAIL_LIMIT = 200;
 
-interface WorkerContext {
+/** Bounded startup priming: refuse to act until one tail read succeeds. */
+export const PRIME_MAX_ATTEMPTS = 10;
+
+/** Injectable CLI runner so tests never spawn a real binary. */
+export type RunFn = (binPath: string, args: readonly string[]) => Captured;
+
+export interface WorkerContext {
   config: ResolvedWorkerConfig;
   roomId: string;
   binPath: string;
   cli: CliContext;
   dryRun: boolean;
   seenEventIds: Set<string>;
+  run: RunFn;
 }
 
 function cliContextFor(config: ResolvedWorkerConfig): CliContext {
@@ -135,9 +151,25 @@ function formatArgv(binPath: string, args: readonly string[]): string {
   return [binPath, ...args].map((part) => (/\s/.test(part) ? JSON.stringify(part) : part)).join(' ');
 }
 
+/**
+ * Truncate untrusted text to a UTF-8 byte budget without splitting a code
+ * point, appending "…" when something was cut. Room-task fields are untrusted
+ * room content; a verbose-but-honest task must still fit the protocol limits
+ * instead of crashing the worker.
+ */
+export function truncateBytes(text: string, maxBytes: number): string {
+  const buf = Buffer.from(text, 'utf8');
+  if (buf.byteLength <= maxBytes) {
+    return text;
+  }
+  const marker = '…'; // 3 bytes in UTF-8
+  const cut = buf.subarray(0, Math.max(maxBytes - 3, 0)).toString('utf8').replace(/�+$/, '');
+  return `${cut}${marker}`;
+}
+
 /** Fail closed unless a local iroh-rooms identity exists in the data dir. */
 function verifyIdentity(ctx: WorkerContext): void {
-  const captured = runIrohRooms(ctx.binPath, buildIdentityShowArgs(ctx.cli));
+  const captured = ctx.run(ctx.binPath, buildIdentityShowArgs(ctx.cli));
   if (captured.returncode !== 0) {
     const coded = parseCodedError(captured.stderr);
     fail(
@@ -154,9 +186,15 @@ function verifyIdentity(ctx: WorkerContext): void {
   note(`identity: ${identity.identityId.slice(0, 8)}… (${identity.name ?? 'unnamed'})`);
 }
 
-/** SPEC §11.2 claim message. */
-function claimMessage(task: RoomTask, agentName: string): string {
-  return `Claiming task ${task.id} as ${agentName}. I will post progress through agent.status and share artifacts when ready.`;
+/** SPEC §11.2 claim message, capped to the message-body byte limit. */
+export function claimMessage(task: RoomTask, agentName: string): string {
+  const message = `Claiming task ${task.id} as ${agentName}. I will post progress through agent.status and share artifacts when ready.`;
+  return truncateBytes(message, MAX_MESSAGE_BODY_BYTES);
+}
+
+/** `claimed <id>: <title>` status message, capped to the status-message limit. */
+export function claimStatusMessage(task: RoomTask): string {
+  return truncateBytes(`claimed ${task.id}: ${task.title}`, MAX_STATUS_MESSAGE_BYTES);
 }
 
 /**
@@ -172,7 +210,7 @@ function claimAndDrive(ctx: WorkerContext, task: RoomTask): void {
   const statusArgs = buildAgentStatusArgs(ctx.cli, {
     roomId: ctx.roomId,
     status: 'claimed',
-    message: `claimed ${task.id}: ${task.title}`,
+    message: claimStatusMessage(task),
     progress: 5,
   });
 
@@ -184,14 +222,14 @@ function claimAndDrive(ctx: WorkerContext, task: RoomTask): void {
     return;
   }
 
-  const sent = runIrohRooms(ctx.binPath, sendArgs);
+  const sent = ctx.run(ctx.binPath, sendArgs);
   if (sent.returncode !== 0) {
     note(`claim message for ${task.id} failed (exit ${sent.returncode}): ${redact(sent.stderr).trim()}`);
     return; // fail closed: do not post claimed status for an unclaimed task
   }
   note(`claimed ${task.id} (event ${parseSendEventId(sent.stdout) ?? 'unknown'})`);
 
-  const status = runIrohRooms(ctx.binPath, statusArgs);
+  const status = ctx.run(ctx.binPath, statusArgs);
   if (status.returncode !== 0) {
     note(`claimed status for ${task.id} failed (exit ${status.returncode}): ${redact(status.stderr).trim()}`);
   } else {
@@ -213,7 +251,7 @@ function claimAndDrive(ctx: WorkerContext, task: RoomTask): void {
  *     const { state: next, transition } = mapPiEventToStatus(state, event as PiEventLike);
  *     state = next;
  *     if (transition !== null) {
- *       runIrohRooms(ctx.binPath, buildAgentStatusArgs(ctx.cli, {
+ *       ctx.run(ctx.binPath, buildAgentStatusArgs(ctx.cli, {
  *         roomId: ctx.roomId, status: transition.to, message: transition.reason,
  *       }));
  *     }
@@ -237,10 +275,10 @@ function driveTaskWithPi(ctx: WorkerContext, task: RoomTask): void {
   const blockedArgs = buildAgentStatusArgs(ctx.cli, {
     roomId: ctx.roomId,
     status: 'blocked',
-    message: `task ${task.id} claimed by scaffold worker; pi-rpc drive not implemented yet`,
+    message: `task ${truncateBytes(task.id, 256)} claimed by scaffold worker; pi-rpc drive not implemented yet`,
     progress: 5,
   });
-  const captured = runIrohRooms(ctx.binPath, blockedArgs);
+  const captured = ctx.run(ctx.binPath, blockedArgs);
   if (captured.returncode !== 0) {
     note(`blocked status failed (exit ${captured.returncode}): ${redact(captured.stderr).trim()}`);
   }
@@ -265,10 +303,15 @@ function detectTasks(rows: readonly TailRow[]): RoomTask[] {
 /**
  * One poll-diff iteration: offline tail read, diff on event_id, act on new
  * rows. Returns false on a tail failure so callers can decide to abort/retry.
+ *
+ * Room content is untrusted: a single malformed or oversized task must never
+ * crash the worker or abandon the rest of the batch, so each claim is
+ * individually guarded. Events are marked seen before acting, so a poison
+ * message is not retried forever.
  */
-function pollOnce(ctx: WorkerContext, actOnNewRows: boolean): boolean {
+export function pollOnce(ctx: WorkerContext, actOnNewRows: boolean): boolean {
   const tailArgs = buildRoomTailArgs(ctx.cli, { roomId: ctx.roomId, limit: TAIL_LIMIT });
-  const captured = runIrohRooms(ctx.binPath, tailArgs);
+  const captured = ctx.run(ctx.binPath, tailArgs);
   if (captured.returncode !== 0) {
     const coded = parseCodedError(captured.stderr);
     note(
@@ -301,9 +344,42 @@ function pollOnce(ctx: WorkerContext, actOnNewRows: boolean): boolean {
     // TODO(scaffold): claim-conflict resolution — scan the tail for an
     // existing claim of task.id by another agent before claiming (out of
     // scope for MVP per DESIGN.md §12).
-    claimAndDrive(ctx, task);
+    try {
+      claimAndDrive(ctx, task);
+    } catch (error) {
+      // Untrusted room content must never kill the worker (or its batch):
+      // log, skip this task, keep going. The event is already marked seen.
+      note(`skipping task ${truncateBytes(task.id, 256)}: ${redact(error instanceof Error ? error.message : String(error)).trim()}`);
+    }
   }
   return true;
+}
+
+/**
+ * Continuous-mode startup priming: read the current tail WITHOUT acting so
+ * historical tasks are never claimed. A failed priming read must NOT fail
+ * open (an empty seen-set would make the next acting poll claim the entire
+ * backlog), so this retries with backoff and reports false when priming never
+ * succeeded — the caller must refuse to act in that case.
+ */
+export async function primeSeenEvents(
+  ctx: WorkerContext,
+  options: { maxAttempts?: number; initialDelayMs?: number; sleepFn?: (ms: number) => Promise<void> } = {},
+): Promise<boolean> {
+  const maxAttempts = options.maxAttempts ?? PRIME_MAX_ATTEMPTS;
+  const sleepFn = options.sleepFn ?? ((ms: number) => sleep(ms));
+  let delayMs = options.initialDelayMs ?? 1000;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    if (pollOnce(ctx, false)) {
+      return true;
+    }
+    if (attempt < maxAttempts) {
+      note(`priming tail read failed (attempt ${attempt}/${maxAttempts}); retrying in ${Math.round(delayMs / 1000)}s`);
+      await sleepFn(delayMs);
+      delayMs = Math.min(delayMs * 2, 60_000);
+    }
+  }
+  return false;
 }
 
 /** Dry-run report: resolved config + planned argv; offline tail if possible. */
@@ -379,6 +455,7 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
               cli: cliContextFor(config),
               dryRun: true,
               seenEventIds: new Set<string>(),
+              run: runIrohRooms,
             }
           : null;
       dryRunReport(ctx, config, binError);
@@ -404,6 +481,7 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
     cli: cliContextFor(config),
     dryRun: false,
     seenEventIds: new Set<string>(),
+    run: runIrohRooms,
   };
 
   verifyIdentity(ctx);
@@ -419,13 +497,17 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
 
   // Continuous mode: prime the seen-set from the current tail WITHOUT acting
   // (do not claim historical tasks on startup), then act on new events only.
+  // Priming is mandatory — never act on an unprimed (empty) seen-set.
   note(`polling every ${args.pollIntervalSeconds}s (Ctrl-C to stop)`);
   let running = true;
   process.on('SIGINT', () => {
     running = false;
     note('stopping after the current iteration…');
   });
-  pollOnce(ctx, false);
+  const primed = await primeSeenEvents(ctx, { initialDelayMs: args.pollIntervalSeconds * 1000 });
+  if (!primed) {
+    fail(`could not prime the seen-event set after ${PRIME_MAX_ATTEMPTS} tail attempts; refusing to claim`);
+  }
   while (running) {
     await sleep(args.pollIntervalSeconds * 1000);
     if (!running) break;
@@ -434,6 +516,21 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
   note('stopped');
 }
 
-main().catch((error: unknown) => {
-  fail(error instanceof Error ? error.message : String(error));
-});
+/** True when this module is the executed entry point (not an import). */
+function isMainModule(): boolean {
+  const entry = process.argv[1];
+  if (entry === undefined) {
+    return false;
+  }
+  try {
+    return import.meta.url === pathToFileURL(realpathSync(entry)).href;
+  } catch {
+    return false;
+  }
+}
+
+if (isMainModule()) {
+  main().catch((error: unknown) => {
+    fail(error instanceof Error ? error.message : String(error));
+  });
+}

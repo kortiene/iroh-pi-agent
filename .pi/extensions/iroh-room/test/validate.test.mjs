@@ -49,6 +49,14 @@ test("status label: accepts 1..=64 BYTES, rejects over-limit, empty, control cha
 	assert.throws(() => validateStatusLabel("bad\x7f"), /control characters/);
 });
 
+test("status label: leading '-' rejected (dash labels are never legitimate vocabulary)", () => {
+	assert.throws(() => validateStatusLabel("--help"), /must not start with "-"/);
+	assert.throws(() => validateStatusLabel("-h"), /must not start with "-"/);
+	assert.throws(() => validateStatusLabel("-implementing"), /must not start with "-"/);
+	// interior dashes stay fine
+	assert.equal(validateStatusLabel("ready-for-review"), "ready-for-review");
+});
+
 /* ----------------------------- status message ---------------------------- */
 
 test("status message: optional, <=4096 bytes (multibyte counted in bytes)", () => {
@@ -233,4 +241,38 @@ test("artifact path: outside workspace rejected unless allowOutside; symlinks re
 		validateArtifactPath(secret, { cwd, artifactDir: outside }),
 		realpathSync(secret),
 	);
+});
+
+test("artifact path: iroh home dir is refused even when it sits inside the workspace", async () => {
+	const cwd = await makeWorkspace();
+	const homeDir = join(cwd, ".iroh", "agent");
+	await mkdir(homeDir, { recursive: true });
+	const secret = join(homeDir, "identity.secret");
+	await writeFile(secret, "raw-key-bytes-go-here");
+	await writeFile(join(homeDir, "identity.json"), "{}");
+	// inside home (which is inside cwd) → refused
+	assert.throws(
+		() => validateArtifactPath(secret, { cwd, homeDir }),
+		/refusing to share .*iroh-rooms home directory/,
+	);
+	// ...even for non-secret-named files, and even with allowOutside
+	assert.throws(
+		() => validateArtifactPath(join(homeDir, "identity.json"), { cwd, homeDir, allowOutside: true }),
+		/iroh-rooms home directory/,
+	);
+	// a normal workspace file is unaffected by the homeDir option
+	const okFile = join(cwd, "report.md");
+	await writeFile(okFile, "# ok\n");
+	assert.equal(validateArtifactPath(okFile, { cwd, homeDir }), realpathSync(okFile));
+});
+
+test("artifact path: identity.secret / *.secret names are refused regardless of location or allowOutside", async () => {
+	const cwd = await makeWorkspace();
+	const stray = join(cwd, "identity.secret");
+	await writeFile(stray, "stray-key-material");
+	assert.throws(() => validateArtifactPath(stray, { cwd }), /never shareable/);
+	const suffixed = join(cwd, "deploy.secret");
+	await writeFile(suffixed, "deploy-key-material");
+	assert.throws(() => validateArtifactPath(suffixed, { cwd }), /never shareable/);
+	assert.throws(() => validateArtifactPath(suffixed, { cwd, allowOutside: true }), /never shareable/);
 });

@@ -26,8 +26,12 @@
  * the field is dropped and the error recorded).
  *
  * The standalone skill script (.pi/skills/iroh-room-agent/scripts/
- * parse-room-task.ts) implements the same grammar; this module is the
- * canonical, unit-tested copy for the worker.
+ * parse-room-task.ts) is a line-for-line port of this grammar; this module is
+ * the canonical copy. test/parser-conformance.test.ts runs both parsers over
+ * a shared corpus — grammar changes must land in BOTH files or it fails.
+ *
+ * A ```room-task opener quoted inside another code fence (``` or ````…) is
+ * quoted content, never a claimable task (see extractBlocks).
  */
 
 export const ROOM_TASK_TYPES = ['implement', 'debug', 'review', 'document', 'test'] as const;
@@ -56,8 +60,18 @@ export interface ParsedRoomTasks {
   errors: string[];
 }
 
-const FENCE_OPEN = /^\s*```room-task\s*$/;
-const FENCE_CLOSE = /^\s*```\s*$/;
+/**
+ * Fence rules follow CommonMark: fences may be indented at most 3 spaces.
+ * A room-task block opens with EXACTLY three backticks. Any other 3+-backtick
+ * fence line opens a "foreign" fence (```js, ```markdown, ````…), and
+ * everything inside it — including ```room-task openers — is quoted content,
+ * not a claimable task. A foreign fence closes on a backtick-only line with at
+ * least as many backticks as its opener.
+ */
+const FENCE_OPEN = /^ {0,3}```room-task\s*$/;
+const FENCE_CLOSE = /^ {0,3}```\s*$/;
+const FOREIGN_FENCE_OPEN = /^ {0,3}(`{3,})/;
+const FOREIGN_FENCE_CLOSE = /^ {0,3}(`{3,})\s*$/;
 /** `key: value` (value optional). Key charset excludes ':' so values may contain colons. */
 const KEY_VALUE = /^([A-Za-z_][A-Za-z0-9_.-]*):\s*(.*)$/;
 const LIST_ITEM = /^\s+-\s*(.*)$/;
@@ -87,16 +101,34 @@ interface RawBlock {
   lines: string[];
 }
 
-/** Extract the contents of every properly fenced room-task block. */
+/**
+ * Extract the contents of every properly fenced room-task block, tracking
+ * enclosing foreign fences so a quoted example (a ```room-task opener inside
+ * a ```markdown or ````… fence) is never treated as a real task.
+ */
 function extractBlocks(text: string, errors: string[]): RawBlock[] {
   const lines = text.split(/\r?\n/);
   const blocks: RawBlock[] = [];
   let current: RawBlock | null = null;
+  /** Backtick count of the open foreign fence, or null when outside one. */
+  let foreignFenceLen: number | null = null;
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i] ?? '';
     if (current === null) {
+      if (foreignFenceLen !== null) {
+        const close = FOREIGN_FENCE_CLOSE.exec(line);
+        if (close !== null && (close[1] as string).length >= foreignFenceLen) {
+          foreignFenceLen = null;
+        }
+        continue; // quoted content, including any ```room-task opener
+      }
       if (FENCE_OPEN.test(line)) {
         current = { startLine: i + 1, lines: [] };
+        continue;
+      }
+      const foreign = FOREIGN_FENCE_OPEN.exec(line);
+      if (foreign !== null) {
+        foreignFenceLen = (foreign[1] as string).length;
       }
       continue;
     }

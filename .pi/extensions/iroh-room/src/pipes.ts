@@ -42,12 +42,26 @@ export interface ExposeOptions {
 	target: string;
 	label?: string;
 	cwd?: string;
-	/** Override for tests; defaults to the 20s pipe_id parse deadline. */
+	/** Override for tests; defaults to the manager's pipe_id parse deadline. */
+	parseTimeoutMs?: number;
+}
+
+export interface PipeManagerOptions {
+	/** SIGINT→SIGKILL escalation grace in close(); default 5000ms. */
+	closeGraceMs?: number;
+	/** Deadline for `pipe expose` to print a pipe_id; default 20000ms. */
 	parseTimeoutMs?: number;
 }
 
 export class PipeManager {
 	private readonly pipes = new Map<string, PipeEntry>();
+	private readonly closeGraceMs: number;
+	private readonly parseTimeoutMs: number;
+
+	constructor(options: PipeManagerOptions = {}) {
+		this.closeGraceMs = options.closeGraceMs ?? PIPE_CLOSE_GRACE_MS;
+		this.parseTimeoutMs = options.parseTimeoutMs ?? PIPE_ID_PARSE_TIMEOUT_MS;
+	}
 
 	/**
 	 * Spawn `pipe expose` and resolve once the pipe_id line appears on stdout.
@@ -55,7 +69,7 @@ export class PipeManager {
 	 * print a pipe_id within the deadline — with redacted stderr attached.
 	 */
 	async expose(options: ExposeOptions): Promise<{ record: PipeRecord; stdout: string }> {
-		const timeoutMs = options.parseTimeoutMs ?? PIPE_ID_PARSE_TIMEOUT_MS;
+		const timeoutMs = options.parseTimeoutMs ?? this.parseTimeoutMs;
 		const spawnOptions: { cwd?: string; stdio: ["ignore", "pipe", "pipe"]; detached: false } = {
 			stdio: ["ignore", "pipe", "pipe"],
 			detached: false,
@@ -148,9 +162,9 @@ export class PipeManager {
 	}
 
 	/**
-	 * Close one of our pipes: SIGINT, wait up to 5s for a clean exit (the CLI
-	 * publishes pipe.closed on Ctrl-C), then SIGKILL. Returns false when the
-	 * pipe is not in the registry (safe to call twice).
+	 * Close one of our pipes: SIGINT, wait up to closeGraceMs (default 5s) for
+	 * a clean exit (the CLI publishes pipe.closed on Ctrl-C), then SIGKILL.
+	 * Returns false when the pipe is not in the registry (safe to call twice).
 	 */
 	async close(pipeId: string): Promise<boolean> {
 		const entry = this.pipes.get(pipeId);
@@ -173,10 +187,10 @@ export class PipeManager {
 			};
 			const killTimer = setTimeout(() => {
 				child.kill("SIGKILL");
-			}, PIPE_CLOSE_GRACE_MS);
+			}, this.closeGraceMs);
 			killTimer.unref?.();
 			// Absolute fallback so close() can never hang the caller.
-			const hardTimer = setTimeout(finish, PIPE_CLOSE_GRACE_MS + 2_000);
+			const hardTimer = setTimeout(finish, this.closeGraceMs + 2_000);
 			hardTimer.unref?.();
 			child.once("exit", finish);
 			child.kill("SIGINT");

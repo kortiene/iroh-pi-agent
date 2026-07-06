@@ -36,15 +36,6 @@ function errText(err: unknown): string {
 	return err instanceof Error ? err.message : String(err);
 }
 
-/** Strip one pair of surrounding double quotes, e.g. /room-status implementing "msg". */
-function unquote(text: string): string {
-	const trimmed = text.trim();
-	if (trimmed.length >= 2 && trimmed.startsWith('"') && trimmed.endsWith('"')) {
-		return trimmed.slice(1, -1);
-	}
-	return trimmed;
-}
-
 function describeFailure(envelope: Envelope): string {
 	const code = envelope.error_code !== undefined ? `, ${String(envelope.error_code)}` : "";
 	const detail =
@@ -147,7 +138,9 @@ export function registerIrohCommands(pi: ExtensionAPI, options: IrohRoomOptions 
 			}
 			const spaceIndex = raw.search(/\s/);
 			const status = spaceIndex === -1 ? raw : raw.slice(0, spaceIndex);
-			const message = spaceIndex === -1 ? undefined : unquote(raw.slice(spaceIndex + 1));
+			// Rest of line is the message, VERBATIM (quotes included) — no
+			// quote-stripping outside tokenized commands (/room-artifact).
+			const message = spaceIndex === -1 ? undefined : raw.slice(spaceIndex + 1).trim();
 			try {
 				const envelope = await opAgentStatus(
 					deps,
@@ -168,7 +161,8 @@ export function registerIrohCommands(pi: ExtensionAPI, options: IrohRoomOptions 
 	pi.registerCommand(COMMAND_NAMES.roomSend, {
 		description: "Send a room message: /room-send <message>",
 		handler: async (args, ctx) => {
-			const message = unquote(args);
+			// The whole args string is the message, VERBATIM (quotes included).
+			const message = args.trim();
 			if (message === "") {
 				say(ctx, "usage: /room-send <message>", "error");
 				return;
@@ -228,10 +222,29 @@ export function registerIrohCommands(pi: ExtensionAPI, options: IrohRoomOptions 
 			for (let i = 0; i < tokens.length; i++) {
 				const token = tokens[i];
 				if (token === "--tcp") {
-					tcp = tokens[++i];
+					// A flag given WITHOUT a value is a usage error; only an
+					// omitted --tcp falls back to the config default.
+					const value = tokens[++i];
+					if (value === undefined || value.startsWith("--")) {
+						say(
+							ctx,
+							"--tcp requires a value, e.g. --tcp 127.0.0.1:3000 — omit --tcp entirely to use the configured default",
+							"error",
+						);
+						return;
+					}
+					tcp = value;
 				} else if (token === "--allow") {
 					const value = tokens[++i];
-					if (value !== undefined) allow.push(value);
+					if (value === undefined || value.startsWith("--")) {
+						say(
+							ctx,
+							"--allow requires a value (a 64-hex member identity id) — omit --allow entirely to use allowed_preview_members from config",
+							"error",
+						);
+						return;
+					}
+					allow.push(value);
 				} else if (token === "--close") {
 					close = true;
 					const next = tokens[i + 1];

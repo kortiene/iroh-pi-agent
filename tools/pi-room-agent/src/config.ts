@@ -7,6 +7,11 @@
  *   resolution order per value:
  *     explicit argument > environment variable > .iroh-room-pi.json (cwd) > safe default
  *
+ *   - EVERY IROH_* env var treats an empty string as unset (mirrors the
+ *     extension's envValue() and the binary's IROH_ROOMS_HOME handling)
+ *   - path-like values (iroh_rooms_home, iroh_rooms_bin, artifact_dir) expand
+ *     a leading `~`/`~/` in env and file values before resolving
+ *
  * Fail-closed rules:
  *   - malformed .iroh-room-pi.json  -> ConfigError naming the file
  *   - wrongly-typed known file keys -> ConfigError (unknown keys are ignored)
@@ -18,6 +23,7 @@
  */
 
 import { readFileSync, statSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { delimiter, isAbsolute, join, resolve } from 'node:path';
 
 export const CONFIG_FILE_NAME = '.iroh-room-pi.json';
@@ -183,6 +189,36 @@ function pick(
   return undefined;
 }
 
+/**
+ * Read an env var, treating empty strings as unset. Mirrors the Pi
+ * extension's envValue() and the binary's own IROH_ROOMS_HOME handling, so
+ * `export IROH_ROOM_ID=` in a shell profile falls through to the config file
+ * instead of failing (or, worse, silently resolving "" against cwd).
+ */
+function envValue(env: Record<string, string | undefined>, name: string): string | undefined {
+  const value = env[name];
+  return value === undefined || value === '' ? undefined : value;
+}
+
+/**
+ * Expand a leading `~` or `~/` to the user's home directory (docs show
+ * `--data-dir ~/.iroh-pi-agent`-style values). `~user` forms are not
+ * supported; anything else passes through unchanged.
+ */
+function expandTilde(value: string): string {
+  if (value === '~') {
+    return homedir();
+  }
+  if (value.startsWith('~/')) {
+    return join(homedir(), value.slice(2));
+  }
+  return value;
+}
+
+function expandTildeOpt(value: string | undefined): string | undefined {
+  return value === undefined ? undefined : expandTilde(value);
+}
+
 function validateProgress(source: string, value: number): number {
   if (!Number.isInteger(value) || value < 0 || value > 100) {
     throw new ConfigError(`${source}: default progress must be an integer 0..=100 (got ${value})`);
@@ -206,7 +242,7 @@ export function resolveWorkerConfig(
   // malformed higher-precedence value.
   const roomPick = pick(
     { source: 'explicit --room argument', value: overrides.roomId },
-    { source: 'IROH_ROOM_ID', value: env['IROH_ROOM_ID'] },
+    { source: 'IROH_ROOM_ID', value: envValue(env, 'IROH_ROOM_ID') },
     { source: `${CONFIG_FILE_NAME} room_id`, value: file.room_id },
   );
   let roomId: string | undefined;
@@ -219,11 +255,12 @@ export function resolveWorkerConfig(
     roomId = roomPick.value;
   }
 
-  // iroh-rooms home — may be relative, resolve against cwd.
+  // iroh-rooms home — may be relative (resolve against cwd) or ~-prefixed
+  // (expand against the user's home) in env/file values.
   const homePick = pick(
     { source: '--data-dir', value: overrides.dataDir },
-    { source: 'IROH_ROOMS_HOME', value: env['IROH_ROOMS_HOME'] === '' ? undefined : env['IROH_ROOMS_HOME'] },
-    { source: `${CONFIG_FILE_NAME} iroh_rooms_home`, value: file.iroh_rooms_home },
+    { source: 'IROH_ROOMS_HOME', value: expandTildeOpt(envValue(env, 'IROH_ROOMS_HOME')) },
+    { source: `${CONFIG_FILE_NAME} iroh_rooms_home`, value: expandTildeOpt(file.iroh_rooms_home) },
   );
   const dataDir = homePick !== undefined ? resolve(cwd, homePick.value) : undefined;
 
@@ -231,8 +268,8 @@ export function resolveWorkerConfig(
   // configured, resolution falls back to PATH lookup in resolveIrohRoomsBin().
   const binPick = pick(
     { source: 'explicit binary argument', value: overrides.binPath },
-    { source: 'IROH_ROOMS_BIN', value: env['IROH_ROOMS_BIN'] },
-    { source: `${CONFIG_FILE_NAME} iroh_rooms_bin`, value: file.iroh_rooms_bin },
+    { source: 'IROH_ROOMS_BIN', value: expandTildeOpt(envValue(env, 'IROH_ROOMS_BIN')) },
+    { source: `${CONFIG_FILE_NAME} iroh_rooms_bin`, value: expandTildeOpt(file.iroh_rooms_bin) },
   );
   let binPath: string | undefined;
   if (binPick !== undefined) {
@@ -252,34 +289,34 @@ export function resolveWorkerConfig(
   const agentName =
     pick(
       { source: 'explicit agent name', value: overrides.agentName },
-      { source: 'IROH_ROOM_AGENT_NAME', value: env['IROH_ROOM_AGENT_NAME'] },
+      { source: 'IROH_ROOM_AGENT_NAME', value: envValue(env, 'IROH_ROOM_AGENT_NAME') },
       { source: `${CONFIG_FILE_NAME} agent_name`, value: file.agent_name },
     )?.value ?? 'pi-agent';
 
   const artifactPick = pick(
     { source: 'explicit artifact dir', value: overrides.artifactDir },
-    { source: 'IROH_ROOM_ARTIFACT_DIR', value: env['IROH_ROOM_ARTIFACT_DIR'] },
-    { source: `${CONFIG_FILE_NAME} artifact_dir`, value: file.artifact_dir },
+    { source: 'IROH_ROOM_ARTIFACT_DIR', value: expandTildeOpt(envValue(env, 'IROH_ROOM_ARTIFACT_DIR')) },
+    { source: `${CONFIG_FILE_NAME} artifact_dir`, value: expandTildeOpt(file.artifact_dir) },
   );
   const artifactDir = resolve(cwd, artifactPick?.value ?? 'artifacts');
 
   // default progress: env value must be a plain non-negative integer string.
   let defaultProgress: number | undefined;
+  const envProgress = envValue(env, 'IROH_ROOM_DEFAULT_PROGRESS');
   if (overrides.defaultProgress !== undefined) {
     defaultProgress = validateProgress('explicit default progress', overrides.defaultProgress);
-  } else if (env['IROH_ROOM_DEFAULT_PROGRESS'] !== undefined) {
-    const rawEnv = env['IROH_ROOM_DEFAULT_PROGRESS'];
-    if (!/^\d{1,3}$/.test(rawEnv)) {
-      throw new ConfigError(`IROH_ROOM_DEFAULT_PROGRESS must be an integer 0..=100 (got "${rawEnv}")`);
+  } else if (envProgress !== undefined) {
+    if (!/^\d{1,3}$/.test(envProgress)) {
+      throw new ConfigError(`IROH_ROOM_DEFAULT_PROGRESS must be an integer 0..=100 (got "${envProgress}")`);
     }
-    defaultProgress = validateProgress('IROH_ROOM_DEFAULT_PROGRESS', Number(rawEnv));
+    defaultProgress = validateProgress('IROH_ROOM_DEFAULT_PROGRESS', Number(envProgress));
   } else if (file.default_progress !== undefined) {
     defaultProgress = validateProgress(`${CONFIG_FILE_NAME} default_progress`, file.default_progress);
   }
 
   // allowed preview members — env (single id) beats the file array.
   let allowedPreviewMembers: string[];
-  const envMember = env['IROH_ROOM_ALLOWED_PREVIEW_MEMBER'];
+  const envMember = envValue(env, 'IROH_ROOM_ALLOWED_PREVIEW_MEMBER');
   if (envMember !== undefined) {
     allowedPreviewMembers = [envMember];
   } else {

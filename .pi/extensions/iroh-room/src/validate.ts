@@ -35,13 +35,22 @@ function byteLength(text: string): number {
 	return Buffer.byteLength(text, "utf8");
 }
 
-/** agent.status label: required, 1..=64 bytes, no control chars, non-empty after trim. */
+/**
+ * agent.status label: required, 1..=64 bytes, no control chars, non-empty
+ * after trim, no leading "-" (dash-leading labels are never legitimate status
+ * vocabulary and only exist to smuggle flag-shaped values to the CLI).
+ */
 export function validateStatusLabel(label: unknown): string {
 	if (typeof label !== "string") {
 		throw new Error("status is required and must be a string");
 	}
 	if (label.trim().length === 0) {
 		throw new Error("status must be non-empty (after trimming whitespace)");
+	}
+	if (label.startsWith("-")) {
+		throw new Error(
+			`status label must not start with "-" (got ${JSON.stringify(label)}) — use a plain word like "implementing"`,
+		);
 	}
 	if (byteLength(label) > MAX_STATUS_LABEL_BYTES) {
 		throw new Error(
@@ -227,6 +236,11 @@ export interface ArtifactPathOptions {
 	cwd: string;
 	/** Optional configured artifact dir (absolute); also allowed as a containment root. */
 	artifactDir?: string;
+	/**
+	 * Resolved iroh-rooms home (--data-dir). Files inside it are NEVER
+	 * shareable — it holds identity.secret — regardless of allowOutside.
+	 */
+	homeDir?: string;
 	/** Config escape hatch: allow_artifact_paths_outside_workspace. */
 	allowOutside?: boolean;
 	/** Override for tests; defaults to the 100 MiB protocol cap. */
@@ -236,8 +250,10 @@ export interface ArtifactPathOptions {
 /**
  * Artifact path: must exist, be a regular file, be <=100 MiB, and (unless
  * allowOutside) resolve — through symlinks — to inside the workspace cwd or
- * the configured artifact dir. Returns the real (symlink-resolved) absolute
- * path, which is what gets passed to the CLI.
+ * the configured artifact dir. Regardless of allowOutside, refuses anything
+ * inside the iroh-rooms home dir and any identity.secret / *.secret file
+ * (SPEC §16: the agent's private key must never be shareable). Returns the
+ * real (symlink-resolved) absolute path, which is what gets passed to the CLI.
  */
 export function validateArtifactPath(filePath: unknown, options: ArtifactPathOptions): string {
 	if (typeof filePath !== "string" || filePath.length === 0) {
@@ -260,6 +276,28 @@ export function validateArtifactPath(filePath: unknown, options: ArtifactPathOpt
 		);
 	}
 	const real = fs.realpathSync(abs);
+	// Hard denylist — applies even with allow_artifact_paths_outside_workspace.
+	if (options.homeDir !== undefined) {
+		let homeReal: string;
+		try {
+			homeReal = fs.realpathSync(options.homeDir);
+		} catch {
+			// home dir does not exist yet — compare against the resolved path
+			homeReal = path.resolve(options.cwd, options.homeDir);
+		}
+		if (real === homeReal || real.startsWith(homeReal + path.sep)) {
+			throw new Error(
+				`refusing to share ${real}: it is inside the iroh-rooms home directory (${homeReal}), ` +
+					"which holds the agent's identity secrets",
+			);
+		}
+	}
+	const base = path.basename(real);
+	if (base === "identity.secret" || base.endsWith(".secret")) {
+		throw new Error(
+			`refusing to share ${real}: identity.secret / *.secret files hold private keys and are never shareable`,
+		);
+	}
 	if (!options.allowOutside) {
 		const roots: string[] = [fs.realpathSync(options.cwd)];
 		if (options.artifactDir !== undefined) {

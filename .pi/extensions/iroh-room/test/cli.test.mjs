@@ -53,10 +53,11 @@ after(() => ext.cleanup());
 
 /* ------------------------------ argv builders ----------------------------- */
 
-test("buildStatusArgs: minimal and fully-optioned", () => {
+test("buildStatusArgs: minimal and fully-optioned (equals-form options, -- before positionals)", () => {
 	assert.deepEqual(buildStatusArgs({ room: ROOM_ID, status: "claimed" }), [
 		"agent",
 		"status",
+		"--",
 		ROOM_ID,
 		"claimed",
 	]);
@@ -71,61 +72,85 @@ test("buildStatusArgs: minimal and fully-optioned", () => {
 		[
 			"agent",
 			"status",
+			"--message=Editing Pi extension tools",
+			"--progress=45",
+			`--artifact=${FILE_ID}`,
+			`--artifact=${"0".repeat(32)}`,
+			"--",
 			ROOM_ID,
 			"implementing",
-			"--message",
-			"Editing Pi extension tools",
-			"--progress",
-			"45",
-			"--artifact",
-			FILE_ID,
-			"--artifact",
-			"0".repeat(32),
 		],
 	);
+});
+
+test("leading-hyphen values survive as positionals/option values (verified against the real binary)", () => {
+	// A markdown-bullet message must ride after "--", never as a bare flag-like arg.
+	assert.deepEqual(buildSendArgs({ room: ROOM_ID, message: "- item 1\n- item 2" }), [
+		"room",
+		"send",
+		"--",
+		ROOM_ID,
+		"- item 1\n- item 2",
+	]);
+	// Equals form keeps a leading-hyphen --message value attached to its flag.
+	assert.deepEqual(
+		buildStatusArgs({ room: ROOM_ID, status: "implementing", message: "-starting work" }),
+		["agent", "status", "--message=-starting work", "--", ROOM_ID, "implementing"],
+	);
+	// A file literally named "-dash.md" stays a positional.
+	assert.deepEqual(buildShareArgs({ room: ROOM_ID, path: "-dash.md", name: "-dash.md" }), [
+		"file",
+		"share",
+		"--name=-dash.md",
+		"--",
+		ROOM_ID,
+		"-dash.md",
+	]);
 });
 
 test("buildSendArgs / buildTailArgs / buildShareArgs", () => {
 	assert.deepEqual(buildSendArgs({ room: ROOM_ID, message: "hello" }), [
 		"room",
 		"send",
+		"--",
 		ROOM_ID,
 		"hello",
 	]);
 	assert.deepEqual(buildTailArgs({ room: ROOM_ID, limit: 25 }), [
 		"room",
 		"tail",
-		ROOM_ID,
 		"--offline",
 		"--json",
-		"--limit",
-		"25",
+		"--limit=25",
+		"--",
+		ROOM_ID,
 	]);
 	assert.deepEqual(buildTailArgs({ room: ROOM_ID }), [
 		"room",
 		"tail",
-		ROOM_ID,
 		"--offline",
 		"--json",
-		"--limit",
-		"50",
+		"--limit=50",
+		"--",
+		ROOM_ID,
 	]);
 	assert.deepEqual(buildShareArgs({ room: ROOM_ID, path: "/abs/report.md" }), [
 		"file",
 		"share",
+		"--",
 		ROOM_ID,
 		"/abs/report.md",
 	]);
 	assert.deepEqual(
 		buildShareArgs({ room: ROOM_ID, path: "/abs/report.md", name: "report.md", mime: "text/markdown" }),
-		["file", "share", ROOM_ID, "/abs/report.md", "--name", "report.md", "--mime", "text/markdown"],
+		["file", "share", "--name=report.md", "--mime=text/markdown", "--", ROOM_ID, "/abs/report.md"],
 	);
 });
 
-test("buildExposeArgs: allow repeats, label and ttl become --label/--expires <n>s", () => {
+test("buildExposeArgs: allow repeats, label and ttl become --label=/--expires=<n>s", () => {
 	assert.deepEqual(
 		buildExposeArgs({ room: ROOM_ID, tcp: "127.0.0.1:3000", allow: [IDENTITY_AGENT] }),
-		["pipe", "expose", ROOM_ID, "--tcp", "127.0.0.1:3000", "--allow", IDENTITY_AGENT],
+		["pipe", "expose", "--tcp=127.0.0.1:3000", `--allow=${IDENTITY_AGENT}`, "--", ROOM_ID],
 	);
 	const second = "b".repeat(64);
 	assert.deepEqual(
@@ -139,34 +164,29 @@ test("buildExposeArgs: allow repeats, label and ttl become --label/--expires <n>
 		[
 			"pipe",
 			"expose",
+			"--tcp=127.0.0.1:3000",
+			`--allow=${IDENTITY_AGENT}`,
+			`--allow=${second}`,
+			"--label=preview",
+			"--expires=900s",
+			"--",
 			ROOM_ID,
-			"--tcp",
-			"127.0.0.1:3000",
-			"--allow",
-			IDENTITY_AGENT,
-			"--allow",
-			second,
-			"--label",
-			"preview",
-			"--expires",
-			"900s",
 		],
 	);
 });
 
 test("close / members / file list / pipe list / whoami builders", () => {
-	assert.deepEqual(buildCloseArgs({ pipeId: PIPE_ID }), ["pipe", "close", PIPE_ID]);
-	assert.deepEqual(buildMembersArgs({ room: ROOM_ID }), ["room", "members", ROOM_ID, "--json"]);
-	assert.deepEqual(buildFileListArgs({ room: ROOM_ID }), ["file", "list", ROOM_ID, "--json"]);
-	assert.deepEqual(buildPipeListArgs({ room: ROOM_ID }), ["pipe", "list", ROOM_ID]);
+	assert.deepEqual(buildCloseArgs({ pipeId: PIPE_ID }), ["pipe", "close", "--", PIPE_ID]);
+	assert.deepEqual(buildMembersArgs({ room: ROOM_ID }), ["room", "members", "--json", "--", ROOM_ID]);
+	assert.deepEqual(buildFileListArgs({ room: ROOM_ID }), ["file", "list", "--json", "--", ROOM_ID]);
+	assert.deepEqual(buildPipeListArgs({ room: ROOM_ID }), ["pipe", "list", "--", ROOM_ID]);
 	assert.deepEqual(buildWhoamiArgs(), ["identity", "show", "--json"]);
 });
 
-test("withDataDir prepends the global flag only when home is set", () => {
+test("withDataDir prepends the global flag (equals form) only when home is set", () => {
 	assert.deepEqual(withDataDir(undefined, ["room", "send"]), ["room", "send"]);
 	assert.deepEqual(withDataDir("/data/agent", ["room", "send"]), [
-		"--data-dir",
-		"/data/agent",
+		"--data-dir=/data/agent",
 		"room",
 		"send",
 	]);
@@ -326,7 +346,7 @@ test("runCli: prepends --data-dir, passes timeout, returns ok on exit 0", async 
 	assert.equal(run.stdout, STATUS_STDOUT);
 	assert.equal(calls.length, 1);
 	assert.equal(calls[0].command, "/bin/iroh-rooms");
-	assert.deepEqual(calls[0].args, ["--data-dir", "/data/agent", "agent", "status", ROOM_ID, "claimed"]);
+	assert.deepEqual(calls[0].args, ["--data-dir=/data/agent", "agent", "status", ROOM_ID, "claimed"]);
 	assert.equal(calls[0].options.timeout, 60_000);
 });
 

@@ -106,6 +106,85 @@ describe('parseRoomTasks — happy path', () => {
   });
 });
 
+describe('parseRoomTasks — quoted blocks inside another fence are NOT tasks', () => {
+  it('ignores a room-task block quoted inside a ```markdown fence', () => {
+    const text = [
+      'Here is an EXAMPLE of the format (do not claim it):',
+      '```markdown',
+      '```room-task',
+      'id: EXAMPLE-1',
+      'type: implement',
+      'title: Example task, not real',
+      '```',
+      '```',
+    ].join('\n');
+    expect(parseRoomTasks(text)).toEqual({ tasks: [], errors: [] });
+  });
+
+  it('ignores a room-task block quoted inside a ````-fence (SPEC §11 quoting style)', () => {
+    const text = [
+      '````markdown',
+      '```room-task',
+      'id: EXAMPLE-2',
+      'type: implement',
+      'title: Quoted with four backticks',
+      '```',
+      '````',
+    ].join('\n');
+    expect(parseRoomTasks(text)).toEqual({ tasks: [], errors: [] });
+  });
+
+  it('a ```-line inside a ````-fence does not close the outer fence', () => {
+    const text = [
+      '````',
+      '```',
+      '```room-task',
+      'id: EXAMPLE-3',
+      'type: implement',
+      'title: still quoted',
+      '```',
+      '````',
+    ].join('\n');
+    expect(parseRoomTasks(text)).toEqual({ tasks: [], errors: [] });
+  });
+
+  it('still parses a legitimate block after a closed foreign fence', () => {
+    const text = [
+      '```js',
+      'console.log("hi");',
+      '```',
+      '',
+      '```room-task',
+      'id: REAL-1',
+      'type: implement',
+      'title: real task after quoted code',
+      '```',
+    ].join('\n');
+    const { tasks, errors } = parseRoomTasks(text);
+    expect(errors).toEqual([]);
+    expect(tasks.map((t) => t.id)).toEqual(['REAL-1']);
+  });
+
+  it('ignores an indentation-quoted (4+ spaces) room-task fence instead of half-parsing it', () => {
+    const text = [
+      'Example, indented as code:',
+      '    ```room-task',
+      '    id: EXAMPLE-4',
+      '    type: implement',
+      '    title: indented example',
+      '    ```',
+    ].join('\n');
+    expect(parseRoomTasks(text)).toEqual({ tasks: [], errors: [] });
+  });
+
+  it('still parses a fence indented up to 3 spaces (CommonMark rule)', () => {
+    const text = ['   ```room-task', 'id: REAL-2', 'type: test', 'title: ok', '   ```'].join('\n');
+    const { tasks, errors } = parseRoomTasks(text);
+    expect(errors).toEqual([]);
+    expect(tasks.map((t) => t.id)).toEqual(['REAL-2']);
+  });
+});
+
 describe('parseRoomTasks — malformed input (never throws)', () => {
   it('reports an unterminated fence and yields no task', () => {
     const { tasks, errors } = parseRoomTasks('```room-task\nid: T-1\ntype: implement\ntitle: x\n');

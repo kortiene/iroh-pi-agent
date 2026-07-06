@@ -30,11 +30,14 @@ import {
   FILE_ID,
   FILE_SHARE_STDOUT,
   IDENTITY_SHOW_JSON,
+  INVITE_STDOUT,
+  INVITE_TICKET,
   MEMBER_ID,
   PIPE_EXPOSE_STDOUT,
   PIPE_ID,
   ROOM_ID,
   ROOM_SEND_STDOUT,
+  ROOM_SEND_STDOUT_NO_PEERS_ONLINE,
   SENDER_ID,
   TAIL_JSON_STDOUT,
 } from './fixtures.js';
@@ -42,8 +45,8 @@ import {
 const CTX = {};
 const CTX_HOME = { dataDir: '/agent/home' };
 
-describe('argv builders', () => {
-  it('agent status: full argv in contract order, --data-dir prepended', () => {
+describe('argv builders (equals-form options, "--" before positionals)', () => {
+  it('agent status: full argv in contract order, --data-dir= prepended', () => {
     const args = buildAgentStatusArgs(CTX_HOME, {
       roomId: ROOM_ID,
       status: 'implementing',
@@ -52,19 +55,39 @@ describe('argv builders', () => {
       artifactIds: [FILE_ID, '12'.repeat(16)],
     });
     expect(args).toEqual([
-      '--data-dir', '/agent/home',
-      'agent', 'status', ROOM_ID, 'implementing',
-      '--message', 'Editing handlers',
-      '--progress', '45',
-      '--artifact', FILE_ID,
-      '--artifact', '12'.repeat(16),
+      '--data-dir=/agent/home',
+      'agent', 'status',
+      '--message=Editing handlers',
+      '--progress=45',
+      `--artifact=${FILE_ID}`,
+      `--artifact=${'12'.repeat(16)}`,
+      '--', ROOM_ID, 'implementing',
     ]);
   });
 
   it('agent status: minimal argv without data dir', () => {
     expect(buildAgentStatusArgs(CTX, { roomId: ROOM_ID, status: 'observing' })).toEqual([
-      'agent', 'status', ROOM_ID, 'observing',
+      'agent', 'status', '--', ROOM_ID, 'observing',
     ]);
+  });
+
+  it('dash-prefixed untrusted values ride after "--" or in equals form, never as flags', () => {
+    // Battery verified against the real binary (review-tmp/argv-check-worker):
+    // a bullet-list message, a "--help" status label, a "-x" status message,
+    // and a "-dash.md" file name must all stay positional/option-values.
+    expect(buildRoomSendArgs(CTX, { roomId: ROOM_ID, message: '- bullet item' })).toEqual([
+      'room', 'send', '--', ROOM_ID, '- bullet item',
+    ]);
+    expect(buildAgentStatusArgs(CTX, { roomId: ROOM_ID, status: '--help', message: '-x' })).toEqual([
+      'agent', 'status', '--message=-x', '--', ROOM_ID, '--help',
+    ]);
+    expect(buildFileShareArgs(CTX, { roomId: ROOM_ID, path: '/w/a.md', name: '-dash.md' })).toEqual([
+      'file', 'share', '--name=-dash.md', '--', ROOM_ID, '/w/a.md',
+    ]);
+  });
+
+  it('rejects a relative --data-dir (the convention requires an absolute path)', () => {
+    expect(() => buildIdentityShowArgs({ dataDir: 'relative/home' })).toThrowError(/absolute/);
   });
 
   it('agent status: validation fails closed', () => {
@@ -89,7 +112,7 @@ describe('argv builders', () => {
 
   it('room send: argv + body byte limits', () => {
     expect(buildRoomSendArgs(CTX_HOME, { roomId: ROOM_ID, message: 'hello' })).toEqual([
-      '--data-dir', '/agent/home', 'room', 'send', ROOM_ID, 'hello',
+      '--data-dir=/agent/home', 'room', 'send', '--', ROOM_ID, 'hello',
     ]);
     expect(() => buildRoomSendArgs(CTX, { roomId: ROOM_ID, message: '' })).toThrowError(/1\.\.=16384/);
     expect(() => buildRoomSendArgs(CTX, { roomId: ROOM_ID, message: 'x'.repeat(16385) })).toThrowError(/16384/);
@@ -98,10 +121,10 @@ describe('argv builders', () => {
 
   it('room tail: offline json with clamped limit', () => {
     expect(buildRoomTailArgs(CTX, { roomId: ROOM_ID })).toEqual([
-      'room', 'tail', ROOM_ID, '--offline', '--json', '--limit', '50',
+      'room', 'tail', '--offline', '--json', '--limit=50', '--', ROOM_ID,
     ]);
-    expect(buildRoomTailArgs(CTX, { roomId: ROOM_ID, limit: 1000 })).toContain('500');
-    expect(buildRoomTailArgs(CTX, { roomId: ROOM_ID, limit: 0 })).toContain('1');
+    expect(buildRoomTailArgs(CTX, { roomId: ROOM_ID, limit: 1000 })).toContain('--limit=500');
+    expect(buildRoomTailArgs(CTX, { roomId: ROOM_ID, limit: 0 })).toContain('--limit=1');
     expect(() => buildRoomTailArgs(CTX, { roomId: ROOM_ID, limit: 2.5 })).toThrowError(/integer/);
   });
 
@@ -109,8 +132,8 @@ describe('argv builders', () => {
     expect(
       buildFileShareArgs(CTX_HOME, { roomId: ROOM_ID, path: '/w/report.md', name: 'r.md', mime: 'text/markdown' }),
     ).toEqual([
-      '--data-dir', '/agent/home',
-      'file', 'share', ROOM_ID, '/w/report.md', '--name', 'r.md', '--mime', 'text/markdown',
+      '--data-dir=/agent/home',
+      'file', 'share', '--name=r.md', '--mime=text/markdown', '--', ROOM_ID, '/w/report.md',
     ]);
     expect(() => buildFileShareArgs(CTX, { roomId: ROOM_ID, path: 'relative.md' })).toThrowError(/absolute/);
     expect(() => buildFileShareArgs(CTX, { roomId: ROOM_ID, path: '/w/a', name: 'x'.repeat(256) })).toThrowError(/255/);
@@ -127,13 +150,14 @@ describe('argv builders', () => {
         ttlSeconds: 3600,
       }),
     ).toEqual([
-      '--data-dir', '/agent/home',
-      'pipe', 'expose', ROOM_ID,
-      '--tcp', '127.0.0.1:3000',
-      '--allow', MEMBER_ID,
-      '--allow', SENDER_ID,
-      '--label', 'preview',
-      '--expires', '3600s',
+      '--data-dir=/agent/home',
+      'pipe', 'expose',
+      '--tcp=127.0.0.1:3000',
+      `--allow=${MEMBER_ID}`,
+      `--allow=${SENDER_ID}`,
+      '--label=preview',
+      '--expires=3600s',
+      '--', ROOM_ID,
     ]);
   });
 
@@ -173,12 +197,12 @@ describe('argv builders', () => {
   });
 
   it('pipe close / lists / identity argv', () => {
-    expect(buildPipeCloseArgs(CTX, { pipeId: PIPE_ID })).toEqual(['pipe', 'close', PIPE_ID]);
+    expect(buildPipeCloseArgs(CTX, { pipeId: PIPE_ID })).toEqual(['pipe', 'close', '--', PIPE_ID]);
     expect(() => buildPipeCloseArgs(CTX, { pipeId: 'xyz' })).toThrowError(/32 lowercase hex/);
-    expect(buildRoomMembersArgs(CTX, { roomId: ROOM_ID })).toEqual(['room', 'members', ROOM_ID, '--json']);
-    expect(buildFileListArgs(CTX, { roomId: ROOM_ID })).toEqual(['file', 'list', ROOM_ID, '--json']);
-    expect(buildPipeListArgs(CTX, { roomId: ROOM_ID })).toEqual(['pipe', 'list', ROOM_ID]);
-    expect(buildIdentityShowArgs(CTX_HOME)).toEqual(['--data-dir', '/agent/home', 'identity', 'show', '--json']);
+    expect(buildRoomMembersArgs(CTX, { roomId: ROOM_ID })).toEqual(['room', 'members', '--json', '--', ROOM_ID]);
+    expect(buildFileListArgs(CTX, { roomId: ROOM_ID })).toEqual(['file', 'list', '--json', '--', ROOM_ID]);
+    expect(buildPipeListArgs(CTX, { roomId: ROOM_ID })).toEqual(['pipe', 'list', '--', ROOM_ID]);
+    expect(buildIdentityShowArgs(CTX_HOME)).toEqual(['--data-dir=/agent/home', 'identity', 'show', '--json']);
   });
 });
 
@@ -188,8 +212,9 @@ describe('stdout parsers (verbatim CLI fixtures)', () => {
     expect(parseStatusEventId('unrelated')).toBeUndefined();
   });
 
-  it('parses the event id from room send output', () => {
+  it('parses the event id from room send output (both delivered wording variants)', () => {
     expect(parseSendEventId(ROOM_SEND_STDOUT)).toBe(EVENT_ID);
+    expect(parseSendEventId(ROOM_SEND_STDOUT_NO_PEERS_ONLINE)).toBe(EVENT_ID);
     expect(parseSendEventId(AGENT_STATUS_STDOUT)).toBeUndefined();
   });
 
@@ -296,6 +321,15 @@ describe('redact', () => {
     expect(redact('token = deadbeefcafe99')).toBe('token = [REDACTED]');
   });
 
+  it('redacts prefixed FOO_TOKEN/FOO_SECRET-style keys (same pattern as the extension)', () => {
+    const value = ['abcdefgh', '12345678'].join('');
+    expect(redact(`GITHUB_TOKEN=${value}`)).toBe('GITHUB_TOKEN=[REDACTED]');
+    expect(redact(`NPM_TOKEN: ${value}`)).toBe('NPM_TOKEN: [REDACTED]');
+    expect(redact(`MY_API_SECRET=${value}`)).toBe('MY_API_SECRET=[REDACTED]');
+    expect(redact(`my-api-key=${value}`)).toBe('my-api-key=[REDACTED]');
+    expect(redact(`"authToken": "${value}"`)).toBe('"authToken": "[REDACTED]"');
+  });
+
   it('never redacts the protocol public currency', () => {
     const protocolText = [
       `room_id: ${ROOM_ID}`,
@@ -313,5 +347,13 @@ describe('redact', () => {
     expect(redact(AGENT_STATUS_STDOUT)).toBe(AGENT_STATUS_STDOUT);
     expect(redact(FILE_SHARE_STDOUT)).toBe(FILE_SHARE_STDOUT);
     expect(redact(PIPE_EXPOSE_STDOUT)).toBe(PIPE_EXPOSE_STDOUT);
+  });
+
+  it('passes real invite output (ticket + secret warning line) through untouched', () => {
+    // The roomtkt1 ticket is protocol currency; the "carries a secret" warning
+    // line must also survive redaction verbatim.
+    expect(redact(INVITE_STDOUT)).toBe(INVITE_STDOUT);
+    expect(INVITE_STDOUT).toContain('warning: this ticket carries a secret');
+    expect(INVITE_STDOUT).toContain(`\n  ${INVITE_TICKET}\n`);
   });
 });

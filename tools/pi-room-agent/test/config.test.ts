@@ -1,5 +1,5 @@
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -109,6 +109,76 @@ describe('resolveWorkerConfig precedence', () => {
     const config = resolveWorkerConfig({}, { cwd, env: { IROH_ROOMS_HOME: '' } });
     expect(config.dataDir).toBe(resolve(cwd, 'file-home'));
   });
+
+  it('treats EVERY empty-string env var as unset (mirrors the extension)', () => {
+    writeFileSync(join(cwd, 'file-bin'), '');
+    writeConfigFile({
+      room_id: ROOM_C,
+      iroh_rooms_bin: 'file-bin',
+      agent_name: 'from-file',
+      default_progress: 10,
+    });
+    const config = resolveWorkerConfig(
+      {},
+      {
+        cwd,
+        env: {
+          IROH_ROOM_ID: '',
+          IROH_ROOMS_BIN: '',
+          IROH_ROOM_AGENT_NAME: '',
+          IROH_ROOM_ARTIFACT_DIR: '',
+          IROH_ROOM_DEFAULT_PROGRESS: '',
+          IROH_ROOM_ALLOWED_PREVIEW_MEMBER: '',
+        },
+      },
+    );
+    expect(config.roomId).toBe(ROOM_C); // falls through to the file, no ConfigError
+    expect(config.binPath).toBe(join(cwd, 'file-bin')); // not "<cwd> is not a regular file"
+    expect(config.agentName).toBe('from-file');
+    expect(config.artifactDir).toBe(resolve(cwd, 'artifacts')); // not cwd itself
+    expect(config.defaultProgress).toBe(10);
+    expect(config.allowedPreviewMembers).toEqual([]);
+  });
+
+  it('empty env vars fall through to safe defaults when no file exists', () => {
+    const config = resolveWorkerConfig(
+      {},
+      { cwd, env: { IROH_ROOM_ID: '', IROH_ROOM_AGENT_NAME: '', IROH_ROOM_ARTIFACT_DIR: '' } },
+    );
+    expect(config.roomId).toBeUndefined();
+    expect(config.agentName).toBe('pi-agent');
+    expect(config.artifactDir).toBe(resolve(cwd, 'artifacts'));
+  });
+});
+
+describe('tilde expansion (iroh_rooms_home / iroh_rooms_bin / artifact_dir)', () => {
+  it('expands ~ and ~/ in env values', () => {
+    const config = resolveWorkerConfig(
+      {},
+      { cwd, env: { IROH_ROOMS_HOME: '~/.iroh-pi-agent', IROH_ROOM_ARTIFACT_DIR: '~' } },
+    );
+    expect(config.dataDir).toBe(join(homedir(), '.iroh-pi-agent'));
+    expect(config.artifactDir).toBe(homedir());
+  });
+
+  it('expands ~/ in config file values', () => {
+    writeConfigFile({ iroh_rooms_home: '~/agent-home', artifact_dir: '~/artifacts' });
+    const config = resolveWorkerConfig({}, { cwd, env: {} });
+    expect(config.dataDir).toBe(join(homedir(), 'agent-home'));
+    expect(config.artifactDir).toBe(join(homedir(), 'artifacts'));
+  });
+
+  it('expands ~/ in IROH_ROOMS_BIN before the exists check', () => {
+    expect(() =>
+      resolveWorkerConfig({}, { cwd, env: { IROH_ROOMS_BIN: '~/definitely-missing-iroh-rooms-bin' } }),
+    ).toThrowError(new RegExp(`not found at ${join(homedir(), 'definitely-missing-iroh-rooms-bin').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+  });
+
+  it('does not expand ~ in the middle of a path', () => {
+    writeConfigFile({ artifact_dir: 'a/~b' });
+    const config = resolveWorkerConfig({}, { cwd, env: {} });
+    expect(config.artifactDir).toBe(resolve(cwd, 'a/~b'));
+  });
 });
 
 describe('config file failure modes (fail closed)', () => {
@@ -171,11 +241,15 @@ describe('room id validation (fail closed, no fall-through)', () => {
 
 describe('default progress validation', () => {
   it('rejects non-integer env values', () => {
-    for (const bad of ['abc', '1.5', '-1', '101', '']) {
+    for (const bad of ['abc', '1.5', '-1', '101']) {
       expect(() =>
         resolveWorkerConfig({}, { cwd, env: { IROH_ROOM_DEFAULT_PROGRESS: bad } }),
       ).toThrowError(ConfigError);
     }
+    // empty means UNSET, not invalid (extension parity)
+    expect(
+      resolveWorkerConfig({}, { cwd, env: { IROH_ROOM_DEFAULT_PROGRESS: '' } }).defaultProgress,
+    ).toBeUndefined();
   });
 
   it('rejects out-of-range and fractional file values', () => {

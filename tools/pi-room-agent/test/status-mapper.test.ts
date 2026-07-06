@@ -53,6 +53,29 @@ describe('mapPiEventToStatus', () => {
     expect(transition).toBeNull();
   });
 
+  it('agent_start resets sawToolExecution so a second run maps implementing again', () => {
+    // Run 1: start, tool, end.
+    let state: MapperState = INITIAL_MAPPER_STATE;
+    state = mapPiEventToStatus(state, { type: 'agent_start' }).state;
+    state = mapPiEventToStatus(state, { type: 'tool_execution_start', toolName: 'edit' }).state;
+    state = mapPiEventToStatus(state, agentEnd('stop')).state;
+    expect(state).toEqual({ status: 'ready_for_review', sawToolExecution: true });
+
+    // Run 2 on the same threaded state: agent_start must reset the per-run flag…
+    const start2 = mapPiEventToStatus(state, { type: 'agent_start' });
+    expect(start2.state).toEqual({ status: 'planning', sawToolExecution: false });
+    expect(start2.transition?.to).toBe('planning');
+
+    // …so run 2's first tool execution posts implementing (not silence).
+    const tool2 = mapPiEventToStatus(start2.state, { type: 'tool_execution_start', toolName: 'edit' });
+    expect(tool2.state).toEqual({ status: 'implementing', sawToolExecution: true });
+    expect(tool2.transition).toEqual({
+      from: 'planning',
+      to: 'implementing',
+      reason: 'first tool execution (edit)',
+    });
+  });
+
   it('first tool_execution_start → implementing', () => {
     const planning: MapperState = { status: 'planning', sawToolExecution: false };
     const { state, transition } = mapPiEventToStatus(planning, {
@@ -145,6 +168,19 @@ describe('mapPiEventToStatus', () => {
     );
     expect(state.status).toBe('failed');
     expect(transition?.reason).toBe('pi agent run error');
+  });
+
+  it('agent_end with stopReason length (truncated run) → blocked, never ready_for_review', () => {
+    const { state, transition } = mapPiEventToStatus(
+      { status: 'implementing', sawToolExecution: true },
+      agentEnd('length'),
+    );
+    expect(state.status).toBe('blocked');
+    expect(transition).toEqual({
+      from: 'implementing',
+      to: 'blocked',
+      reason: 'pi agent run truncated at token limit',
+    });
   });
 
   it('reads the LAST assistant message stopReason', () => {

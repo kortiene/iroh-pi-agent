@@ -3,11 +3,12 @@
  * transitions (DESIGN.md §7).
  *
  * Mapping contract:
- *   - agent_start                                  -> planning
- *   - first tool_execution_start                   -> implementing
+ *   - agent_start                                  -> planning (per-run state resets)
+ *   - first tool_execution_start (this run)        -> implementing
  *   - tool_execution_start of bash w/ test command -> testing (any time)
  *   - agent_end, last assistant stopReason normal  -> ready_for_review
  *   - agent_end, stopReason aborted/error          -> failed
+ *   - agent_end, stopReason length (truncated run) -> blocked
  *   - anything else                                -> no transition
  *
  * The mapper is a fold: callers thread MapperState through mapPiEventToStatus
@@ -81,11 +82,13 @@ export function isTestishCommand(command: string): boolean {
   return TEST_COMMAND_PATTERN.test(command);
 }
 
-type AgentEndOutcome = 'success' | 'aborted' | 'error';
+type AgentEndOutcome = 'success' | 'aborted' | 'error' | 'truncated';
 
 /**
  * Classify an agent_end event by the last assistant message's stopReason
- * (pi-ai reasons: stop | length | toolUse | aborted | error). Missing or
+ * (pi-ai reasons: stop | length | toolUse | aborted | error). 'length' means
+ * the run was cut off at the token limit — the work is NOT reviewable, so it
+ * counts as truncated (mapped to blocked), never as success. Missing or
  * unrecognized data counts as success — the run ended without a reported
  * abort/error.
  */
@@ -103,6 +106,7 @@ function agentEndOutcome(event: PiEventLike): AgentEndOutcome {
     const stopReason = record['stopReason'];
     if (stopReason === 'aborted') return 'aborted';
     if (stopReason === 'error') return 'error';
+    if (stopReason === 'length') return 'truncated';
     return 'success';
   }
   return 'success';
@@ -124,7 +128,9 @@ function transitionTo(state: MapperState, to: AgentStatus, reason: string, sawTo
 export function mapPiEventToStatus(state: MapperState, event: PiEventLike): MapResult {
   switch (event.type) {
     case 'agent_start':
-      return transitionTo(state, 'planning', 'pi agent run started', state.sawToolExecution);
+      // A new run begins: reset the per-run tool-execution flag so this run's
+      // first tool_execution_start maps to implementing again.
+      return transitionTo(state, 'planning', 'pi agent run started', false);
 
     case 'tool_execution_start': {
       const command = event.args !== undefined ? event.args['command'] : undefined;
@@ -143,6 +149,9 @@ export function mapPiEventToStatus(state: MapperState, event: PiEventLike): MapR
       const outcome = agentEndOutcome(event);
       if (outcome === 'success') {
         return transitionTo(state, 'ready_for_review', 'pi agent run completed', state.sawToolExecution);
+      }
+      if (outcome === 'truncated') {
+        return transitionTo(state, 'blocked', 'pi agent run truncated at token limit', state.sawToolExecution);
       }
       return transitionTo(state, 'failed', `pi agent run ${outcome}`, state.sawToolExecution);
     }

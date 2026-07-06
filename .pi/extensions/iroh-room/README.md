@@ -20,8 +20,8 @@ Use `/reload` inside Pi to pick up code changes.
 | --- | --- |
 | `iroh_agent_status` | Post a signed `agent.status` (label ≤64 bytes, message ≤4096 bytes, integer progress 0..100, ≤16 artifact ids) |
 | `iroh_room_send` | Send a room message (1..16384 bytes) |
-| `iroh_room_tail_snapshot` | Offline read of recent events → compact summaries (no raw stdout; limit clamped 1..500, default 50) |
-| `iroh_file_share` | Share a workspace file as a content-addressed artifact (≤100 MiB, path must resolve inside the workspace or `artifact_dir`) |
+| `iroh_room_tail_snapshot` | Offline read of recent events → compact summaries (no raw stdout; limit clamped 1..500, default 50; the envelope marks room content as untrusted input) |
+| `iroh_file_share` | Share a workspace file as a content-addressed artifact (≤100 MiB, path must resolve inside the workspace or `artifact_dir`; the iroh-rooms home dir and `identity.secret`/`*.secret` files are always refused) |
 | `iroh_pipe_expose` | Expose `127.0.0.1:<port>` to explicitly allowed members via a background `pipe expose` child |
 | `iroh_pipe_close` | Close a pipe (SIGINT→SIGKILL for pipes this session owns, CLI otherwise) |
 | `iroh_pipe_list` | CLI pipe list + the pipes owned by this session |

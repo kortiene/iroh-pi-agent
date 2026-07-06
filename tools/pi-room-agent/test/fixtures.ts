@@ -12,6 +12,7 @@ export const SENDER_ID = 'cd'.repeat(32);
 export const MEMBER_ID = 'ef'.repeat(32);
 export const FILE_ID = `file_${'12'.repeat(16)}`;
 export const PIPE_ID = '34'.repeat(16);
+export const INVITE_ID = '78'.repeat(16);
 export const BLOB_HASH = `blake3:${'56'.repeat(32)}`;
 
 /** `agent status` — note the alignment padding on `room:` / `from:`. */
@@ -22,7 +23,20 @@ stored: yes
 delivered: 1 connected peer(s)
 `;
 
+/**
+ * `room send` — the delivered line has TWO 0-delivered wording variants
+ * (message.rs print_send, both observed live): "no other members to reach"
+ * (nobody else in the room) and "no peers online" (members exist, none
+ * connected). Both are pinned here.
+ */
 export const ROOM_SEND_STDOUT = `sent: ${EVENT_ID}
+room: ${ROOM_ID}
+from: ${SENDER_ID}
+stored: yes
+delivered: 0 (no other members to reach — stored locally only)
+`;
+
+export const ROOM_SEND_STDOUT_NO_PEERS_ONLINE = `sent: ${EVENT_ID}
 room: ${ROOM_ID}
 from: ${SENDER_ID}
 stored: yes
@@ -41,17 +55,43 @@ provider: you (local)
 next: run \`iroh-rooms room tail ${ROOM_ID}\` to serve it, then peers can \`iroh-rooms file fetch ${ROOM_ID} ${FILE_ID}\`
 `;
 
-/** `pipe expose` startup block (long-running; this is stdout before serving). */
+/**
+ * `pipe expose` startup block (long-running; this is stdout before serving).
+ * The `listening:` line is `<64-hex device id>@<ip:port>[,<[v6]:port>...]` —
+ * verified against a live run (e2e-verified-facts.md; render_endpoint_addr).
+ */
 export const PIPE_EXPOSE_STDOUT = `room: ${ROOM_ID}
 target: 127.0.0.1:3000
 label: preview
 allow: ${MEMBER_ID}
-listening: 203.0.113.7:4433
+listening: ${SENDER_ID}@192.0.2.7:4433,[2001:db8::7]:4433
 tip: share this address with connectors via --peer
 pipe_id: ${PIPE_ID}
 connectors run: iroh-rooms pipe connect ${ROOM_ID} ${PIPE_ID} --local <PORT>
 close it with: iroh-rooms pipe close ${PIPE_ID}
 serving the pipe; press Ctrl-C to close it...
+`;
+
+/**
+ * A syntactically plausible (but fake) roomtkt1 invite ticket, assembled at
+ * runtime so secret scanners never see a secret-shaped literal in this file.
+ */
+export const INVITE_TICKET = ['roomtkt1', 'q', 'fake0'.repeat(12)].join('');
+
+/**
+ * `room invite` / `agent invite` — ticket on its own 2-space-indented line
+ * under `ticket:`, followed by the secret warning line (verified against the
+ * live binary; e2e-verified-facts.md).
+ */
+export const INVITE_STDOUT = `invite_id: ${INVITE_ID}
+room: ${ROOM_ID}
+invitee: ${MEMBER_ID}
+role: agent
+expires: 2026-07-06T03:19:58Z (in 60s)
+ticket:
+  ${INVITE_TICKET}
+warning: this ticket carries a secret — share it over a private channel and treat it like a password.
+next: the invitee runs \`iroh-rooms room join <ticket>\`
 `;
 
 export const IDENTITY_SHOW_JSON = `{"version":1,"name":"pi-agent","identity_id":"${SENDER_ID}","device_id":"${MEMBER_ID}","created_at_ms":1751700000000}

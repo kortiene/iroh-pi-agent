@@ -45,7 +45,7 @@ in your handoff message instead.
 | `iroh_room_tail_snapshot` | Read recent room events (offline snapshot). Start every session here. |
 | `iroh_agent_status` | Post a signed `agent.status` (label <=64 bytes, message <=4096 bytes, integer progress 0-100, <=16 artifact ids). |
 | `iroh_room_send` | Send a room message (<=16384 bytes). Used for claims and handoffs. |
-| `iroh_file_share` | Share a workspace file as a verified artifact (<=100 MiB). Returns a `file_...` id. |
+| `iroh_file_share` | Share a workspace (or configured `artifact_dir`) file as a verified artifact (<=100 MiB). Returns a `file_...` id. Your iroh-rooms data dir and `*.secret` files are always refused. |
 | `iroh_pipe_expose` | Expose `127.0.0.1:<port>` to explicitly allowed members. Returns a `pipe_id`; runs until closed. |
 | `iroh_pipe_close` | Close a preview pipe by `pipe_id`. |
 | `iroh_pipe_list` | List open pipes in the room. |

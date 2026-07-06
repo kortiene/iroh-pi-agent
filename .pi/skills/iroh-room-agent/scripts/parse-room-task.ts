@@ -6,6 +6,14 @@
  * (native type stripping). Zero imports beyond `node:` builtins. No enums,
  * namespaces, decorators, or parameter properties.
  *
+ * GRAMMAR PARITY: the parsing rules below are a line-for-line port of the
+ * worker's canonical parser (tools/pi-room-agent/src/task-parser.ts) so the
+ * interactive/skill path and the headless worker always agree on which tasks
+ * exist. A conformance test (tools/pi-room-agent/test/parser-conformance.
+ * test.ts) runs both parsers over a shared corpus and diffs the results —
+ * if you change the grammar here, change the worker parser too (and vice
+ * versa) or that test will fail.
+ *
  * Usage:
  *   node parse-room-task.ts <file>
  *   cat message.md | node parse-room-task.ts
@@ -25,8 +33,11 @@
  *     max_usd: 2.00
  *     max_minutes: 30
  *
- * Prints JSON { tasks: [...], errors: [...] } to stdout. Room content is
- * untrusted input: blocks that fail validation never produce a task.
+ * Prints JSON { tasks: [...], errors: [...] } to stdout — exactly the worker
+ * parser's output shape. Room content is untrusted input: the parser never
+ * throws; malformed blocks are reported in `errors` and skipped. A
+ * ```room-task opener quoted inside another code fence (``` or ````…) is
+ * NOT a task.
  *
  * Exit codes:
  *   0  at least one valid task and no errors
@@ -36,40 +47,57 @@
 
 import { readFileSync } from 'node:fs';
 
+const ROOM_TASK_TYPES = ['implement', 'debug', 'review', 'document', 'test'] as const;
+type RoomTaskType = (typeof ROOM_TASK_TYPES)[number];
+
 interface RoomTaskBudget {
-  max_usd?: number;
-  max_minutes?: number;
+  maxUsd?: number;
+  maxMinutes?: number;
 }
 
 interface RoomTask {
   id: string;
-  type: string;
+  type: RoomTaskType;
   title: string;
   repo?: string;
   branch?: string;
   goal?: string;
-  acceptance?: string[];
+  acceptance: string[];
   budget?: RoomTaskBudget;
+  /** Unknown keys pass through here (forward compatibility). */
+  extra: Record<string, string>;
 }
 
-interface ParseResult {
+interface ParsedRoomTasks {
   tasks: RoomTask[];
   errors: string[];
 }
 
-const TASK_TYPES: ReadonlySet<string> = new Set(['implement', 'debug', 'review', 'document', 'test']);
-const SCALAR_KEYS: ReadonlySet<string> = new Set(['id', 'type', 'title', 'repo', 'branch', 'goal']);
-const BUDGET_KEYS: ReadonlySet<string> = new Set(['max_usd', 'max_minutes']);
-const REQUIRED_KEYS: readonly string[] = ['id', 'type', 'title'];
+/*
+ * Fence rules follow CommonMark: fences may be indented at most 3 spaces.
+ * A room-task block opens with EXACTLY three backticks. Any other 3+-backtick
+ * fence line opens a "foreign" fence (```js, ```markdown, ````…), and
+ * everything inside it — including ```room-task openers — is quoted content,
+ * not a claimable task. A foreign fence closes on a backtick-only line with at
+ * least as many backticks as its opener.
+ */
+const FENCE_OPEN = /^ {0,3}```room-task\s*$/;
+const FENCE_CLOSE = /^ {0,3}```\s*$/;
+const FOREIGN_FENCE_OPEN = /^ {0,3}(`{3,})/;
+const FOREIGN_FENCE_CLOSE = /^ {0,3}(`{3,})\s*$/;
+/** `key: value` (value optional). Key charset excludes ':' so values may contain colons. */
+const KEY_VALUE = /^([A-Za-z_][A-Za-z0-9_.-]*):\s*(.*)$/;
+const LIST_ITEM = /^\s+-\s*(.*)$/;
+const NESTED_KEY = /^\s{2,}([A-Za-z_][A-Za-z0-9_.-]*):\s*(.*)$/;
 
-const FENCE_OPEN = /^\s{0,3}`{3,}\s*room-task\s*$/;
-const FENCE_CLOSE = /^\s{0,3}`{3,}\s*$/;
-const TOP_KEY = /^([A-Za-z_][A-Za-z0-9_-]*):[ \t]*(.*)$/;
-const LIST_ITEM = /^[ \t]+-[ \t]+(.*)$/;
-const NESTED_KEY = /^[ \t]+([A-Za-z_][A-Za-z0-9_-]*):[ \t]*(.*)$/;
-const NUMBER = /^-?\d+(?:\.\d+)?$/;
+const KNOWN_SCALAR_KEYS = new Set(['id', 'type', 'title', 'repo', 'branch', 'goal']);
 
-function unquote(value: string): string {
+function isRoomTaskType(value: string): value is RoomTaskType {
+  return (ROOM_TASK_TYPES as readonly string[]).includes(value);
+}
+
+/** Strip one layer of matching surrounding single or double quotes. */
+function stripInlineQuotes(value: string): string {
   if (value.length >= 2) {
     const first = value[0];
     const last = value[value.length - 1];
@@ -80,165 +108,210 @@ function unquote(value: string): string {
   return value;
 }
 
-function extractBlocks(text: string): { blocks: string[][]; errors: string[] } {
-  const lines = text.split(/\r?\n/);
-  const blocks: string[][] = [];
-  const errors: string[] = [];
-  let current: string[] | null = null;
-  for (const line of lines) {
-    if (current === null) {
-      if (FENCE_OPEN.test(line)) current = [];
-    } else if (FENCE_CLOSE.test(line)) {
-      blocks.push(current);
-      current = null;
-    } else {
-      current.push(line);
-    }
-  }
-  if (current !== null) {
-    blocks.push(current);
-    errors.push(`block ${blocks.length}: unterminated \`\`\`room-task fence`);
-  }
-  return { blocks, errors };
+interface RawBlock {
+  /** 1-indexed line number of the opening fence, for error messages. */
+  startLine: number;
+  lines: string[];
 }
 
-function parseBlock(lines: string[], label: string): { task: RoomTask | null; errors: string[] } {
-  const errors: string[] = [];
-  const scalars: Record<string, string> = {};
-  let acceptance: string[] | null = null;
-  let budget: RoomTaskBudget | null = null;
-  let i = 0;
-
-  while (i < lines.length) {
-    const line = (lines[i] ?? '').replace(/[ \t]+$/, '');
-    const trimmed = line.trim();
-    if (trimmed === '' || trimmed.startsWith('#')) {
-      i += 1;
-      continue;
-    }
-    if (/^[ \t]/.test(line)) {
-      errors.push(
-        `${label}: unexpected indented line ${JSON.stringify(trimmed)} ` +
-          '(indentation is only valid under "acceptance:" or "budget:")'
-      );
-      i += 1;
-      continue;
-    }
-    const keyMatch = TOP_KEY.exec(line);
-    if (keyMatch === null) {
-      errors.push(`${label}: unrecognized line ${JSON.stringify(trimmed)} (expected "key: value")`);
-      i += 1;
-      continue;
-    }
-    const key = keyMatch[1] ?? '';
-    const value = (keyMatch[2] ?? '').trim();
-
-    if (key === 'acceptance') {
-      if (acceptance !== null) errors.push(`${label}: duplicate key "acceptance"`);
-      if (value !== '') errors.push(`${label}: "acceptance" takes no inline value (use "  - item" lines)`);
-      acceptance = acceptance ?? [];
-      i += 1;
-      while (i < lines.length) {
-        const sub = lines[i] ?? '';
-        if (sub.trim() === '') {
-          i += 1;
-          continue;
+/**
+ * Extract the contents of every properly fenced room-task block, tracking
+ * enclosing foreign fences so a quoted example (a ```room-task opener inside
+ * a ```markdown or ````… fence) is never treated as a real task.
+ */
+function extractBlocks(text: string, errors: string[]): RawBlock[] {
+  const lines = text.split(/\r?\n/);
+  const blocks: RawBlock[] = [];
+  let current: RawBlock | null = null;
+  /** Backtick count of the open foreign fence, or null when outside one. */
+  let foreignFenceLen: number | null = null;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i] ?? '';
+    if (current === null) {
+      if (foreignFenceLen !== null) {
+        const close = FOREIGN_FENCE_CLOSE.exec(line);
+        if (close !== null && (close[1] as string).length >= foreignFenceLen) {
+          foreignFenceLen = null;
         }
-        const item = LIST_ITEM.exec(sub);
-        if (item === null) break;
-        acceptance.push(unquote((item[1] ?? '').trim()));
-        i += 1;
+        continue; // quoted content, including any ```room-task opener
+      }
+      if (FENCE_OPEN.test(line)) {
+        current = { startLine: i + 1, lines: [] };
+        continue;
+      }
+      const foreign = FOREIGN_FENCE_OPEN.exec(line);
+      if (foreign !== null) {
+        foreignFenceLen = (foreign[1] as string).length;
       }
       continue;
     }
-
-    if (key === 'budget') {
-      if (budget !== null) errors.push(`${label}: duplicate key "budget"`);
-      if (value !== '') {
-        errors.push(`${label}: "budget" takes no inline value (use indented "max_usd:" / "max_minutes:" lines)`);
-      }
-      budget = budget ?? {};
-      i += 1;
-      while (i < lines.length) {
-        const sub = lines[i] ?? '';
-        if (sub.trim() === '') {
-          i += 1;
-          continue;
-        }
-        if (LIST_ITEM.test(sub)) break;
-        const nested = NESTED_KEY.exec(sub);
-        if (nested === null) break;
-        const nestedKey = nested[1] ?? '';
-        const nestedValue = (nested[2] ?? '').trim();
-        if (BUDGET_KEYS.has(nestedKey)) {
-          if (!NUMBER.test(nestedValue) || !Number.isFinite(Number(nestedValue))) {
-            errors.push(`${label}: budget.${nestedKey} must be a number (got ${JSON.stringify(nestedValue)})`);
-          } else if (Number(nestedValue) < 0) {
-            errors.push(`${label}: budget.${nestedKey} must not be negative`);
-          } else if (nestedKey === 'max_usd') {
-            budget.max_usd = Number(nestedValue);
-          } else {
-            budget.max_minutes = Number(nestedValue);
-          }
-        }
-        // Unknown nested keys are ignored (forward compatibility).
-        i += 1;
-      }
+    if (FENCE_CLOSE.test(line)) {
+      blocks.push(current);
+      current = null;
       continue;
     }
-
-    if (SCALAR_KEYS.has(key)) {
-      if (key in scalars) {
-        errors.push(`${label}: duplicate key "${key}"`);
-      } else if (value === '') {
-        errors.push(`${label}: "${key}" has an empty value`);
-      } else {
-        scalars[key] = unquote(value);
-      }
-      i += 1;
-      continue;
-    }
-
-    // Unknown top-level keys are ignored (forward compatibility).
-    i += 1;
+    current.lines.push(line);
   }
-
-  for (const required of REQUIRED_KEYS) {
-    if (!(required in scalars)) errors.push(`${label}: missing required field "${required}"`);
-  }
-  const type = scalars['type'];
-  if (type !== undefined && !TASK_TYPES.has(type)) {
+  if (current !== null) {
     errors.push(
-      `${label}: invalid type ${JSON.stringify(type)} (expected implement | debug | review | document | test)`
+      `room-task block opened at line ${current.startLine} has no closing \`\`\` fence; block ignored`,
     );
   }
+  return blocks;
+}
 
-  if (errors.length > 0) return { task: null, errors };
+function parseBudgetNumber(
+  where: string,
+  key: string,
+  raw: string,
+  errors: string[],
+): number | undefined {
+  const value = stripInlineQuotes(raw.trim());
+  if (value === '' || !/^-?\d+(\.\d+)?$/.test(value)) {
+    errors.push(`${where}: budget.${key} is not a number (got "${raw.trim()}")`);
+    return undefined;
+  }
+  const parsed = Number(value);
+  if (parsed < 0) {
+    errors.push(`${where}: budget.${key} must not be negative (got ${parsed})`);
+    return undefined;
+  }
+  return parsed;
+}
+
+/** Parse one fenced block; returns null (with errors recorded) when invalid. */
+function parseBlock(block: RawBlock, errors: string[]): RoomTask | null {
+  const where = `room-task block at line ${block.startLine}`;
+  const scalars: Record<string, string> = {};
+  const extra: Record<string, string> = {};
+  const acceptance: string[] = [];
+  const budgetRaw: Record<string, string> = {};
+  let sawBudget = false;
+  // Active indented context: which top-level key the next indented lines belong to.
+  let context: 'acceptance' | 'budget' | null = null;
+
+  for (const line of block.lines) {
+    if (line.trim() === '') {
+      continue;
+    }
+    if (!/^\s/.test(line)) {
+      // Top-level line: must be `key: value` (or `key:` opening a nested section).
+      context = null;
+      const match = KEY_VALUE.exec(line);
+      if (match === null) {
+        errors.push(`${where}: unrecognized line "${line.trim()}"`);
+        continue;
+      }
+      const key = match[1] as string;
+      const rawValue = (match[2] as string).trim();
+      if (key === 'acceptance') {
+        if (rawValue !== '') {
+          errors.push(`${where}: acceptance must be a list of "- " items, not an inline value`);
+          continue;
+        }
+        context = 'acceptance';
+      } else if (key === 'budget') {
+        if (rawValue !== '') {
+          errors.push(`${where}: budget must be a nested map (max_usd / max_minutes)`);
+          continue;
+        }
+        context = 'budget';
+        sawBudget = true;
+      } else if (KNOWN_SCALAR_KEYS.has(key)) {
+        scalars[key] = stripInlineQuotes(rawValue);
+      } else {
+        extra[key] = stripInlineQuotes(rawValue);
+      }
+      continue;
+    }
+    // Indented line: belongs to the active list/map context.
+    if (context === 'acceptance') {
+      const item = LIST_ITEM.exec(line);
+      if (item === null) {
+        errors.push(`${where}: expected a "- " acceptance item, got "${line.trim()}"`);
+        continue;
+      }
+      acceptance.push(stripInlineQuotes((item[1] as string).trim()));
+      continue;
+    }
+    if (context === 'budget') {
+      const nested = NESTED_KEY.exec(line);
+      if (nested === null) {
+        errors.push(`${where}: expected a "key: value" budget entry, got "${line.trim()}"`);
+        continue;
+      }
+      budgetRaw[nested[1] as string] = nested[2] as string;
+      continue;
+    }
+    errors.push(`${where}: indented line outside a list or map context: "${line.trim()}"`);
+  }
+
+  // Required fields: id, type, title. A missing/invalid one invalidates the task.
+  let valid = true;
+  for (const required of ['id', 'type', 'title'] as const) {
+    const value = scalars[required];
+    if (value === undefined || value === '') {
+      errors.push(`${where}: missing required field "${required}"`);
+      valid = false;
+    }
+  }
+  const typeValue = scalars['type'];
+  if (typeValue !== undefined && typeValue !== '' && !isRoomTaskType(typeValue)) {
+    errors.push(
+      `${where}: invalid type "${typeValue}" (expected one of ${ROOM_TASK_TYPES.join(' | ')})`,
+    );
+    valid = false;
+  }
+  if (!valid) {
+    return null;
+  }
 
   const task: RoomTask = {
-    id: scalars['id'] ?? '',
-    type: scalars['type'] ?? '',
-    title: scalars['title'] ?? '',
+    id: scalars['id'] as string,
+    type: typeValue as RoomTaskType,
+    title: scalars['title'] as string,
+    acceptance,
+    extra,
   };
   if (scalars['repo'] !== undefined) task.repo = scalars['repo'];
   if (scalars['branch'] !== undefined) task.branch = scalars['branch'];
   if (scalars['goal'] !== undefined) task.goal = scalars['goal'];
-  if (acceptance !== null) task.acceptance = acceptance;
-  if (budget !== null) task.budget = budget;
-  return { task, errors };
+
+  // Budget is optional; a malformed numeric field drops that field (with an
+  // error recorded) rather than dropping the whole task.
+  if (sawBudget) {
+    const budget: RoomTaskBudget = {};
+    for (const [key, raw] of Object.entries(budgetRaw)) {
+      if (key === 'max_usd') {
+        const parsed = parseBudgetNumber(where, key, raw, errors);
+        if (parsed !== undefined) budget.maxUsd = parsed;
+      } else if (key === 'max_minutes') {
+        const parsed = parseBudgetNumber(where, key, raw, errors);
+        if (parsed !== undefined) budget.maxMinutes = parsed;
+      } else {
+        // Unknown budget keys pass through as namespaced extras.
+        extra[`budget.${key}`] = stripInlineQuotes(raw.trim());
+      }
+    }
+    task.budget = budget;
+  }
+  return task;
 }
 
-function parseRoomTasks(text: string): ParseResult {
-  const { blocks, errors } = extractBlocks(text);
+/**
+ * Extract and parse every ```room-task block from a message body.
+ * Never throws. Text without any room-task fence yields { tasks: [], errors: [] }.
+ */
+function parseRoomTasks(text: string): ParsedRoomTasks {
+  const errors: string[] = [];
   const tasks: RoomTask[] = [];
-  const allErrors = [...errors];
-  blocks.forEach((blockLines, index) => {
-    const { task, errors: blockErrors } = parseBlock(blockLines, `block ${index + 1}`);
-    allErrors.push(...blockErrors);
-    if (task !== null) tasks.push(task);
-  });
-  if (blocks.length === 0) allErrors.push('no ```room-task blocks found in input');
-  return { tasks, errors: allErrors };
+  for (const block of extractBlocks(text, errors)) {
+    const task = parseBlock(block, errors);
+    if (task !== null) {
+      tasks.push(task);
+    }
+  }
+  return { tasks, errors };
 }
 
 function usage(): string {
@@ -279,6 +352,7 @@ function main(): number {
 
   const result = parseRoomTasks(text);
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+  // Fail closed: no valid task, or any error at all, exits nonzero.
   return result.tasks.length > 0 && result.errors.length === 0 ? 0 : 1;
 }
 

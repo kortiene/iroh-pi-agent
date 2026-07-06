@@ -101,6 +101,24 @@ test("empty env strings are treated as unset", async () => {
 	assert.equal(cfg.home, undefined);
 });
 
+test("existing but unreadable config file fails closed (only ENOENT means absent)", async (t) => {
+	if (typeof process.getuid === "function" && process.getuid() === 0) {
+		t.skip("running as root — chmod 000 does not block reads");
+		return;
+	}
+	const cwd = await makeCwd({ room_id: ROOM_ID });
+	const filePath = join(cwd, ".iroh-room-pi.json");
+	await chmod(filePath, 0o000);
+	try {
+		assert.throws(
+			() => resolveConfig({ cwd, env: {} }),
+			/\.iroh-room-pi\.json exists but could not be read \(EACCES\) — fix permissions or remove it/,
+		);
+	} finally {
+		await chmod(filePath, 0o644);
+	}
+});
+
 test("malformed JSON fails closed, naming the file", async () => {
 	const cwd = await makeCwd("{ not json ");
 	assert.throws(() => resolveConfig({ cwd, env: {} }), /\.iroh-room-pi\.json.*not valid JSON/s);
@@ -197,4 +215,34 @@ test("resolveBinary: falls back to PATH scan, else fails closed with all three o
 		() => resolveBinary(cfg, { PATH: "/nonexistent" }),
 		/IROH_ROOMS_BIN.*iroh_rooms_bin.*PATH/s,
 	);
+});
+
+test("leading ~ is expanded for home, bin, and artifact dir (env and file), not mid-path", async () => {
+	const { homedir } = await import("node:os");
+	const home = homedir();
+
+	// file values
+	const cwd = await makeCwd({
+		iroh_rooms_home: "~/rooms-home",
+		iroh_rooms_bin: "~/bin/iroh-rooms",
+		artifact_dir: "~",
+	});
+	const cfg = resolveConfig({ cwd, env: {} });
+	assert.equal(cfg.home, join(home, "rooms-home"));
+	assert.equal(cfg.binOverride, join(home, "bin", "iroh-rooms"));
+	assert.equal(cfg.artifactDir, home);
+
+	// env values beat file values and expand too
+	const cfg2 = resolveConfig({
+		cwd,
+		env: { IROH_ROOMS_HOME: "~/env-home", IROH_ROOMS_BIN: "~/env-bin", IROH_ROOM_ARTIFACT_DIR: "~/env-artifacts" },
+	});
+	assert.equal(cfg2.home, join(home, "env-home"));
+	assert.equal(cfg2.binOverride, join(home, "env-bin"));
+	assert.equal(cfg2.artifactDir, join(home, "env-artifacts"));
+
+	// a tilde that is not a leading ~/ segment is NOT expanded
+	const cwd3 = await makeCwd({ iroh_rooms_home: "a/~b" });
+	const cfg3 = resolveConfig({ cwd: cwd3, env: {} });
+	assert.equal(cfg3.home, resolve(cwd3, "a/~b"));
 });

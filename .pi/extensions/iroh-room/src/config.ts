@@ -10,6 +10,7 @@
  */
 
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 
 import { CONFIG_FILE_NAME, IDENTITY_ID_RE, ROOM_ID_RE } from "./constants.js";
@@ -116,8 +117,17 @@ export function readConfigFile(cwd: string): { raw: RawConfigFile; filePath?: st
 	let text: string;
 	try {
 		text = fs.readFileSync(filePath, "utf8");
-	} catch {
-		return { raw: {} };
+	} catch (err) {
+		// Only a genuinely absent file means "no config". Anything else
+		// (EACCES, EISDIR, EIO, …) must fail closed, not silently drop the
+		// project's room/home settings.
+		const code = (err as NodeJS.ErrnoException).code;
+		if (code === "ENOENT" || code === "ENOTDIR") {
+			return { raw: {} };
+		}
+		throw new Error(
+			`${filePath} exists but could not be read (${code ?? (err instanceof Error ? err.message : String(err))}) — fix permissions or remove it`,
+		);
 	}
 	let parsed: unknown;
 	try {
@@ -166,6 +176,25 @@ function envValue(env: Env, name: string): string | undefined {
 	return value === undefined || value === "" ? undefined : value;
 }
 
+/**
+ * Expand a leading `~`/`~/` to the home directory (JSON has no shell, so the
+ * harness does it for iroh_rooms_home / iroh_rooms_bin / artifact_dir; mirrors
+ * the worker's config semantics). Mid-path tildes are left alone.
+ */
+function expandTilde(value: string): string {
+	if (value === "~") {
+		return os.homedir();
+	}
+	if (value.startsWith("~/")) {
+		return path.join(os.homedir(), value.slice(2));
+	}
+	return value;
+}
+
+function expandTildeOpt(value: string | undefined): string | undefined {
+	return value === undefined ? undefined : expandTilde(value);
+}
+
 /** Resolve the full config from env + config file. Throws on any invalid value. */
 export function resolveConfig(options: { cwd: string; env: Env }): ResolvedConfig {
 	const { cwd, env } = options;
@@ -177,13 +206,13 @@ export function resolveConfig(options: { cwd: string; env: Env }): ResolvedConfi
 	}
 	const roomId = envRoomId ?? raw.room_id;
 
-	const homeRaw = envValue(env, "IROH_ROOMS_HOME") ?? raw.iroh_rooms_home;
+	const homeRaw = expandTildeOpt(envValue(env, "IROH_ROOMS_HOME") ?? raw.iroh_rooms_home);
 	const home = homeRaw === undefined ? undefined : path.resolve(cwd, homeRaw);
 
-	const binOverride = envValue(env, "IROH_ROOMS_BIN") ?? raw.iroh_rooms_bin;
+	const binOverride = expandTildeOpt(envValue(env, "IROH_ROOMS_BIN") ?? raw.iroh_rooms_bin);
 	const agentName = envValue(env, "IROH_ROOM_AGENT_NAME") ?? raw.agent_name;
 
-	const artifactDirRaw = envValue(env, "IROH_ROOM_ARTIFACT_DIR") ?? raw.artifact_dir;
+	const artifactDirRaw = expandTildeOpt(envValue(env, "IROH_ROOM_ARTIFACT_DIR") ?? raw.artifact_dir);
 	const artifactDir = artifactDirRaw === undefined ? undefined : path.resolve(cwd, artifactDirRaw);
 
 	let defaultProgress = raw.default_progress;

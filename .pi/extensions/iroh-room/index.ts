@@ -15,13 +15,25 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import { registerIrohCommands } from "./src/commands.js";
 import { PipeManager } from "./src/pipes.js";
-import { registerIrohTools } from "./src/tools.js";
+import { registerIrohTools, type IrohRoomOptions } from "./src/tools.js";
 
-export default function irohRoomExtension(pi: ExtensionAPI): void {
-	const pipes = new PipeManager();
-	registerIrohTools(pi, { pipes });
-	registerIrohCommands(pi, { pipes });
-	pi.on("session_shutdown", async () => {
-		await pipes.closeAll();
-	});
+/**
+ * Build the extension entry. Exported so tests can inject deps (exec, env,
+ * PipeManager) and verify the session_shutdown wiring against a live child;
+ * Pi itself loads the zero-options default export below.
+ */
+export function createIrohRoomExtension(options: IrohRoomOptions = {}): (pi: ExtensionAPI) => void {
+	return (pi) => {
+		// One shared PipeManager for tools, commands, AND session_shutdown —
+		// splitting them would leak `pipe expose` children on shutdown.
+		const pipes = options.pipes ?? new PipeManager();
+		const wired: IrohRoomOptions = { ...options, pipes };
+		registerIrohTools(pi, wired);
+		registerIrohCommands(pi, wired);
+		pi.on("session_shutdown", async () => {
+			await pipes.closeAll();
+		});
+	};
 }
+
+export default createIrohRoomExtension();

@@ -81,17 +81,27 @@ least-privileged `agent` role.
 ### 4. Agent joins (admin must be online)
 
 `room join` needs the admin reachable. The admin runs a tail session with
-`--accept-joins` while the agent joins:
+`--accept-joins`; its startup block prints a `listening:` line whose first
+entry is the admin's dialable address (`<device_id>@<ip:port>`, followed by
+comma-separated IPv6 alternates). Copy that first address and pass it to the
+agent's join via `--peer`:
 
 ```bash
 # Terminal A — admin (leave running):
 iroh-rooms room tail <ROOM_ID> --accept-joins
+# accepting joins: yes (...)
+# listening: <device_id>@<ip:port>,...    <- copy the first <device_id>@<ip:port>
 
 # Terminal B — agent:
-iroh-rooms --data-dir ~/.iroh-pi-agent room join <roomtkt1...> --display-name "pi-agent"
+iroh-rooms --data-dir ~/.iroh-pi-agent room join <roomtkt1...> \
+  --peer "<device_id>@<ip:port>" --display-name "pi-agent" --timeout 20s
 # joined: blake3:<event-id>
 # role: agent
 ```
+
+Without the `--peer` hint the join has to find the admin through network
+discovery, which can time out with `error[no_admin_reachable]` (exit 6);
+passing the admin's printed `listening:` address makes the join deterministic.
 
 ### 5. Configure the harness in your repo
 
@@ -101,10 +111,14 @@ In the repository where Pi will work, create `.iroh-room-pi.json` (start from
 ```json
 {
   "room_id": "blake3:<64-hex>",
-  "iroh_rooms_home": "/Users/you/.iroh-pi-agent",
+  "iroh_rooms_home": "~/.iroh-pi-agent",
   "iroh_rooms_bin": "/path/to/iroh-room/target/release/iroh-rooms"
 }
 ```
+
+A leading `~` in `iroh_rooms_home`, `iroh_rooms_bin`, or `artifact_dir` is
+expanded to your home directory by the harness itself — JSON has no shell, so
+nothing else expands it.
 
 ### 6. Start Pi and trust the project
 
@@ -127,7 +141,7 @@ Resolution order for every value:
 
 ```text
 1. Explicit argument (tool input / command flag)
-2. Environment variable
+2. Environment variable (an empty value is treated as unset)
 3. .iroh-room-pi.json in the current working directory
 4. Safe default (or fail closed where no default is safe, e.g. room_id)
 ```
@@ -142,24 +156,25 @@ Resolution order for every value:
 | `IROH_ROOM_AGENT_NAME` | Agent display name used in claim messages. |
 | `IROH_ROOM_DEFAULT_PROGRESS` | Default `--progress` for status posts when none is given. |
 | `IROH_ROOM_ALLOWED_PREVIEW_MEMBER` | Default allowed member (64-hex identity id) for `/room-preview`. |
-| `IROH_ROOM_ARTIFACT_DIR` | Directory whose files may be shared as artifacts (default `artifacts`). |
+| `IROH_ROOM_ARTIFACT_DIR` | Extra directory (outside the workspace) whose files may **also** be shared as artifacts; files inside the workspace cwd are always shareable. Nothing is created on disk. The extension has no default; the worker defaults to `<cwd>/artifacts`. |
 
 ### `.iroh-room-pi.json` keys (all optional)
 
 | Key | Type | Notes |
 | --- | --- | --- |
 | `room_id` | string | Must match `blake3:<64 lowercase hex>`; anything else is rejected (fail closed). |
-| `iroh_rooms_home` | string | Data dir; relative paths resolve against the repo cwd. |
-| `iroh_rooms_bin` | string | Binary path; must exist and be a file; relative paths resolve against cwd. |
+| `iroh_rooms_home` | string | Data dir; a leading `~` is expanded by the harness; relative paths resolve against the repo cwd. |
+| `iroh_rooms_bin` | string | Binary path; must exist and be a file; `~` is expanded; relative paths resolve against cwd. |
 | `agent_name` | string | Default `pi-agent`. |
-| `artifact_dir` | string | Default `artifacts`. |
+| `artifact_dir` | string | Extra allowed root for `iroh_file_share` paths besides the workspace cwd (see [Validation limits](#validation-limits-mirroring-iroh-rooms-core)); `~` is expanded. No default in the extension; the worker defaults to `artifacts`. |
 | `default_progress` | integer | 0-100. |
 | `default_preview_host` | string | Only `127.0.0.1` is usable. |
 | `default_preview_port` | integer | e.g. `3000`. |
 | `allowed_preview_members` | string[] | 64-hex identity ids. |
 | `allow_artifact_paths_outside_workspace` | boolean | Default `false`; keep it that way unless you know why. |
 
-Malformed JSON fails closed with an error naming the file. Unknown keys are
+Malformed JSON — or a config file that exists but cannot be read (e.g. broken
+permissions) — fails closed with an error naming the file. Unknown keys are
 ignored (forward compatibility).
 
 Binary resolution: `IROH_ROOMS_BIN` / `iroh_rooms_bin` if set, else
@@ -168,8 +183,10 @@ with a message explaining those options.
 
 ## Tools
 
-Registered by `.pi/extensions/iroh-room/`. Every tool accepts an optional
-`room_id` that overrides the configured room.
+Registered by `.pi/extensions/iroh-room/`. Every room-scoped tool accepts an
+optional `room_id` that overrides the configured room. Two exceptions:
+`iroh_identity_show` takes no arguments, and `iroh_pipe_close` takes only
+`pipe_id` (the CLI infers the room from the local log).
 
 | Tool | Purpose | Underlying CLI call |
 | --- | --- | --- |
@@ -188,6 +205,13 @@ Registered by `.pi/extensions/iroh-room/`. Every tool accepts an optional
 fetch files manually with `iroh-rooms file fetch <ROOM> <FILE_ID>` while the
 sharer runs `room tail`).
 
+Argv note: the CLI-call column above uses conventional usage notation. The
+exact argv the harness emits passes option values in `--flag=value` form and
+inserts a literal `--` separator before user-controlled positional text, so
+messages, status labels, file names, and pipe labels that begin with `-`
+(e.g. a Markdown bullet list) are passed through literally instead of being
+misparsed as CLI flags.
+
 ### Validation limits (mirroring `iroh-rooms-core`)
 
 - status label: required, 1-64 bytes, no control characters
@@ -199,7 +223,11 @@ sharer runs `room tail`).
 - pipe allow-list: non-empty, each a 64-hex identity id
 - artifact path: must exist, be a regular file, <= 100 MiB, and resolve
   (after symlinks) inside the workspace or the configured `artifact_dir`
-  unless `allow_artifact_paths_outside_workspace` is true
+  unless `allow_artifact_paths_outside_workspace` is true. The workspace cwd
+  is always an allowed root; `artifact_dir` only *adds* a second one. Paths
+  inside the resolved iroh-rooms home (the agent's data dir) and `*.secret`
+  files are **always** refused, even with
+  `allow_artifact_paths_outside_workspace`
 - file name / mime overrides: <= 255 bytes each
 
 ### Result envelope
@@ -209,6 +237,11 @@ CLI failure (nonzero exit): `{ ok: false, exit_code, error_code?, error_detail?,
 stdout, stderr }` — returned, not thrown. Local failures (validation, missing
 config, binary not found, timeout) throw and surface as tool errors. All
 stdout/stderr is secret-redacted and truncated to 8 KB.
+
+`iroh_room_tail_snapshot` returns `{ ok, events, summary, untrusted_note }`
+instead of raw stdout; `untrusted_note` travels with every snapshot and
+reminds the model that event bodies and summaries are third-party room
+content — untrusted input, not instructions.
 
 Because `pipe expose` serves until interrupted, `iroh_pipe_expose` runs it as a
 managed background child process: the tool returns once `pipe_id:` appears in
@@ -223,8 +256,13 @@ are closed on session shutdown.
 | `/room-status <status> [message...]` | Post `agent.status`; first token is the status label, the rest becomes the message. |
 | `/room-send <message>` | Send a room message (everything after the command is the message; no quotes needed). |
 | `/room-artifact <path> [name]` | Share a file; quote arguments containing spaces. |
-| `/room-preview [--tcp 127.0.0.1:<port>] [--allow <64-hex>]... [--close [pipe_id]]` | Open (or `--close`) a loopback preview pipe; defaults come from config. |
+| `/room-preview [--tcp 127.0.0.1:<port>] [--allow <64-hex>]... \| --close [pipe_id]` | Open a loopback preview pipe (defaults come from config), **or** close one/all with `--close` — an exclusive mode that cannot be combined with `--tcp`/`--allow`. |
 | `/room-tail [limit]` | Render a recent-events snapshot. |
+
+A flag given without its value (e.g. a trailing `--tcp`) is a usage error, not
+a silent fallback to the config default. Free-text arguments (messages, status
+text) may start with `-`; they are passed to the CLI literally (see the argv
+note in [Tools](#tools)).
 
 ## Skill and prompt templates
 
@@ -266,7 +304,8 @@ budget:
 Fields: `id`, `type` (`implement | debug | review | document | test`), `title`
 (all required); `repo`, `branch`, `goal`, `acceptance` (list), `budget`
 (`max_usd`, `max_minutes`) optional. Budgets are advisory in the MVP — nothing
-enforces them yet.
+enforces them yet. A `room-task` block quoted inside another code fence (as in
+the example above) is treated as documentation, not as a claimable task.
 
 On claim, the agent sends a message
 (`Claiming task IR-PI-001 as pi-agent. ...`) and posts
@@ -310,12 +349,17 @@ export IROH_ROOMS_BIN="$PWD/target/release/iroh-rooms"
 "$IROH_ROOMS_BIN" agent invite <ROOM_ID> <AGENT_IDENTITY_ID>   # note the roomtkt1... ticket
 
 # 6. Agent joins while the admin is online
-"$IROH_ROOMS_BIN" room tail <ROOM_ID> --accept-joins           # terminal A (admin, leave running)
-"$IROH_ROOMS_BIN" --data-dir ~/.iroh-pi-agent room join <roomtkt1...> --display-name "pi-agent"  # terminal B
+# Terminal A (admin, leave running) — the startup block prints
+# `listening: <device_id>@<ip:port>,...`; copy the first address:
+"$IROH_ROOMS_BIN" room tail <ROOM_ID> --accept-joins
+# Terminal B (agent) — pass the admin's listening address as --peer:
+"$IROH_ROOMS_BIN" --data-dir ~/.iroh-pi-agent room join <roomtkt1...> \
+  --peer "<device_id>@<ip:port>" --display-name "pi-agent" --timeout 20s
 ```
 
 In the repo, write `.iroh-room-pi.json` (room_id, `iroh_rooms_home` pointing at
-`~/.iroh-pi-agent`, `iroh_rooms_bin`), then:
+`~/.iroh-pi-agent` — the harness expands the `~` itself — and
+`iroh_rooms_bin`), then:
 
 ```text
 7.  pi -a                                       # start Pi, trust the project
@@ -356,8 +400,25 @@ documented TODOs. Try it with:
 ```bash
 cd tools/pi-room-agent
 npm install
-npm start -- --once --dry-run
+npm start -- --room blake3:<64-hex> --once --dry-run
 ```
+
+Two gotchas, both fail-closed by design:
+
+- **Dry-run still requires a room id.** Pass `--room <blake3:...>`, export
+  `IROH_ROOM_ID`, or provide `room_id` via a config file; without one the
+  worker exits 1 (`no room id configured`). It does not need the binary or an
+  identity for the dry-run itself — the planned argv still prints.
+- **`.iroh-room-pi.json` is resolved from the worker's own working
+  directory.** `npm start` always runs with cwd `tools/pi-room-agent` (even
+  via `npm --prefix`), so the repo-root config file from Setup step 5 is *not*
+  picked up. Either pass `--room`/`--data-dir` (or the env vars) explicitly as
+  above, or run the entry point from the directory that contains the config:
+
+  ```bash
+  # from the repo root (reads ./.iroh-room-pi.json):
+  tools/pi-room-agent/node_modules/.bin/tsx tools/pi-room-agent/src/main.ts --once --dry-run
+  ```
 
 Remember the trust gotcha: a headless `pi` only loads this project's `.pi/`
 resources with `--approve`/`-a` or a saved trust decision.
@@ -383,7 +444,9 @@ resources with `--approve`/`-a` or a saved trust decision.
 - **Fail closed.** Missing `room_id`, unresolvable binary, missing identity,
   or invalid input aborts before anything is sent. Artifact paths must resolve
   inside the workspace (or `artifact_dir`) unless explicitly configured
-  otherwise.
+  otherwise — and the agent's iroh-rooms data dir and `*.secret` files (e.g.
+  `identity.secret`, the agent's private signing key) are never shareable,
+  regardless of configuration.
 
 ## Known CLI gaps (Developer Preview)
 
@@ -422,7 +485,7 @@ Tool results carry these through as `{ ok: false, exit_code, error_code, ... }`.
 | Tool error: binary not found | `iroh-rooms` not on `PATH`, no override set | Set `IROH_ROOMS_BIN` or `iroh_rooms_bin`, or install onto `PATH`; check `/room`. |
 | `error[identity_not_found]` (exit 2) | No identity in the resolved data dir | Run `identity create` with the same `--data-dir`/`IROH_ROOMS_HOME` the harness uses; `/room` shows which. |
 | `error[room_not_found]` (exit 2) | Wrong `room_id`, or the agent's home never joined this room | Verify the id; confirm membership with `room members <ROOM_ID> --json` from the agent home. |
-| `room join` fails / hangs (exit 6, `no_admin_reachable`) | Admin offline | Admin runs `room tail <ROOM_ID> --accept-joins` while the agent joins. |
+| `room join` fails / hangs (exit 6, `no_admin_reachable`) | Admin offline, or no dialable address hint | Admin runs `room tail <ROOM_ID> --accept-joins` while the agent joins, **and** the agent passes the admin's printed `listening:` address via `--peer "<device_id>@<ip:port>"` (see Setup step 4). |
 | Ticket rejected (exit 5) | Expired, or bound to a different identity | Re-issue `agent invite <ROOM_ID> <AGENT_IDENTITY_ID>` for the agent's actual identity id. |
 | Exit 3 on an action | Acting with the wrong identity/role | Agents are least-privileged; admin operations need the admin's home. |
 | `/room-preview` refuses the target | Non-loopback `--tcp` | Only `127.0.0.1:<port>` is accepted, by design. |
@@ -430,6 +493,7 @@ Tool results carry these through as `{ ok: false, exit_code, error_code, ... }`.
 | `delivered: 0 (... stored locally only)` | No peers online | Normal — the event is stored and syncs later. |
 | `/room*` commands or `iroh_*` tools missing in Pi | Project not trusted | Start `pi -a` once, or accept the trust prompt; headless runs need `--approve`. |
 | Tool returns `ok: false` with `stderr` | CLI-level failure | Read `error_code`/`error_detail`, match against the exit-code table above. |
+| Uncoded `error: unexpected argument '-...' found` (exit 2) on a message/status starting with `-` | Harness build predating the argv fix (option values in space form, no `--` separator) | Update the harness: current builds pass `--flag=value` and a literal `--` before positional text, so hyphen-leading content goes through literally. |
 
 ## Out of scope (MVP)
 

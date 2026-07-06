@@ -27,7 +27,9 @@ cd /path/to/iroh-room && cargo build --release
 
 # 2. One-time room setup: identities, room, agent invite + join
 #    (full walkthrough in docs/pi-harness.md — the agent needs its OWN
-#    identity in its OWN data dir, and the admin online to accept the join)
+#    identity in its OWN data dir, and the admin online running
+#    `room tail --accept-joins`; the agent joins with the admin's printed
+#    listening address via --peer)
 
 # 3. Configure this repo
 cp .iroh-room-pi.json.example .iroh-room-pi.json

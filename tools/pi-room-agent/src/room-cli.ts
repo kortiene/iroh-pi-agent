@@ -70,10 +70,22 @@ function requireRoomId(roomId: string): string {
 }
 
 function base(ctx: CliContext): string[] {
-  return ctx.dataDir !== undefined ? ['--data-dir', ctx.dataDir] : [];
+  if (ctx.dataDir === undefined) {
+    return [];
+  }
+  if (!isAbsolute(ctx.dataDir)) {
+    throw new CliValidationError(`--data-dir must be an absolute path (got "${ctx.dataDir}")`);
+  }
+  return [`--data-dir=${ctx.dataDir}`];
 }
 
 // --- argv builders (DESIGN.md §4; argv only, no shell, binary not included) ---
+//
+// Hardened argv convention (verified against iroh-rooms 0.1.0, see
+// review-tmp/argv-check-worker): every option uses the equals form
+// (--message=<v>) and a literal "--" terminates options before positionals,
+// so untrusted values that start with "-" (a bullet-list message, a status
+// label of "--help", a file named "-dash.md") can never be parsed as flags.
 
 export interface AgentStatusInput {
   roomId: string;
@@ -95,18 +107,18 @@ export function buildAgentStatusArgs(ctx: CliContext, input: AgentStatusInput): 
   if (CONTROL_CHARS.test(status)) {
     throw new CliValidationError('status label must not contain control characters');
   }
-  const args = [...base(ctx), 'agent', 'status', input.roomId, status];
+  const args = [...base(ctx), 'agent', 'status'];
   if (input.message !== undefined) {
     if (byteLength(input.message) > MAX_STATUS_MESSAGE_BYTES) {
       throw new CliValidationError(`status message must be at most ${MAX_STATUS_MESSAGE_BYTES} bytes`);
     }
-    args.push('--message', input.message);
+    args.push(`--message=${input.message}`);
   }
   if (input.progress !== undefined) {
     if (!Number.isInteger(input.progress) || input.progress < 0 || input.progress > 100) {
       throw new CliValidationError(`progress must be an integer 0..=100 (got ${input.progress})`);
     }
-    args.push('--progress', String(input.progress));
+    args.push(`--progress=${input.progress}`);
   }
   if (input.artifactIds !== undefined) {
     if (input.artifactIds.length > MAX_ARTIFACT_REFS) {
@@ -116,9 +128,10 @@ export function buildAgentStatusArgs(ctx: CliContext, input: AgentStatusInput): 
       if (!ARTIFACT_ID_PATTERN.test(id)) {
         throw new CliValidationError(`artifact id must be file_<32-hex> or bare 32-hex (got "${id}")`);
       }
-      args.push('--artifact', id);
+      args.push(`--artifact=${id}`);
     }
   }
+  args.push('--', input.roomId, status);
   return args;
 }
 
@@ -130,7 +143,7 @@ export function buildRoomSendArgs(ctx: CliContext, input: { roomId: string; mess
       `message body must be 1..=${MAX_MESSAGE_BODY_BYTES} bytes (got ${bytes})`,
     );
   }
-  return [...base(ctx), 'room', 'send', input.roomId, input.message];
+  return [...base(ctx), 'room', 'send', '--', input.roomId, input.message];
 }
 
 export function buildRoomTailArgs(ctx: CliContext, input: { roomId: string; limit?: number }): string[] {
@@ -140,7 +153,7 @@ export function buildRoomTailArgs(ctx: CliContext, input: { roomId: string; limi
     throw new CliValidationError(`tail limit must be an integer (got ${requested})`);
   }
   const limit = Math.min(Math.max(requested, 1), MAX_TAIL_LIMIT);
-  return [...base(ctx), 'room', 'tail', input.roomId, '--offline', '--json', '--limit', String(limit)];
+  return [...base(ctx), 'room', 'tail', '--offline', '--json', `--limit=${limit}`, '--', input.roomId];
 }
 
 export function buildFileShareArgs(
@@ -151,19 +164,20 @@ export function buildFileShareArgs(
   if (!isAbsolute(input.path)) {
     throw new CliValidationError(`file share path must be absolute (got "${input.path}")`);
   }
-  const args = [...base(ctx), 'file', 'share', input.roomId, input.path];
+  const args = [...base(ctx), 'file', 'share'];
   if (input.name !== undefined) {
     if (input.name === '' || byteLength(input.name) > MAX_FILE_NAME_BYTES) {
       throw new CliValidationError(`file name override must be 1..=${MAX_FILE_NAME_BYTES} bytes`);
     }
-    args.push('--name', input.name);
+    args.push(`--name=${input.name}`);
   }
   if (input.mime !== undefined) {
     if (input.mime === '' || byteLength(input.mime) > MAX_MIME_TYPE_BYTES) {
       throw new CliValidationError(`mime override must be 1..=${MAX_MIME_TYPE_BYTES} bytes`);
     }
-    args.push('--mime', input.mime);
+    args.push(`--mime=${input.mime}`);
   }
+  args.push('--', input.roomId, input.path);
   return args;
 }
 
@@ -191,24 +205,25 @@ export function buildPipeExposeArgs(ctx: CliContext, input: PipeExposeInput): st
   if (input.allow.length === 0) {
     throw new CliValidationError('pipe expose requires a non-empty allow list (no default-all)');
   }
-  const args = [...base(ctx), 'pipe', 'expose', input.roomId, '--tcp', input.tcp];
+  const args = [...base(ctx), 'pipe', 'expose', `--tcp=${input.tcp}`];
   for (const member of input.allow) {
     if (!MEMBER_ID_PATTERN.test(member)) {
       throw new CliValidationError(
         `allow entry must be a 64-char lowercase hex identity id (got "${member}")`,
       );
     }
-    args.push('--allow', member);
+    args.push(`--allow=${member}`);
   }
   if (input.label !== undefined) {
-    args.push('--label', input.label);
+    args.push(`--label=${input.label}`);
   }
   if (input.ttlSeconds !== undefined) {
     if (!Number.isInteger(input.ttlSeconds) || input.ttlSeconds <= 0) {
       throw new CliValidationError(`ttl_seconds must be a positive integer (got ${input.ttlSeconds})`);
     }
-    args.push('--expires', `${input.ttlSeconds}s`);
+    args.push(`--expires=${input.ttlSeconds}s`);
   }
+  args.push('--', input.roomId);
   return args;
 }
 
@@ -216,22 +231,22 @@ export function buildPipeCloseArgs(ctx: CliContext, input: { pipeId: string }): 
   if (!PIPE_ID_PATTERN.test(input.pipeId)) {
     throw new CliValidationError(`pipe id must be 32 lowercase hex chars (got "${input.pipeId}")`);
   }
-  return [...base(ctx), 'pipe', 'close', input.pipeId];
+  return [...base(ctx), 'pipe', 'close', '--', input.pipeId];
 }
 
 export function buildRoomMembersArgs(ctx: CliContext, input: { roomId: string }): string[] {
   requireRoomId(input.roomId);
-  return [...base(ctx), 'room', 'members', input.roomId, '--json'];
+  return [...base(ctx), 'room', 'members', '--json', '--', input.roomId];
 }
 
 export function buildFileListArgs(ctx: CliContext, input: { roomId: string }): string[] {
   requireRoomId(input.roomId);
-  return [...base(ctx), 'file', 'list', input.roomId, '--json'];
+  return [...base(ctx), 'file', 'list', '--json', '--', input.roomId];
 }
 
 export function buildPipeListArgs(ctx: CliContext, input: { roomId: string }): string[] {
   requireRoomId(input.roomId);
-  return [...base(ctx), 'pipe', 'list', input.roomId];
+  return [...base(ctx), 'pipe', 'list', '--', input.roomId];
 }
 
 export function buildIdentityShowArgs(ctx: CliContext): string[] {
@@ -359,22 +374,34 @@ export function parseIdentityShow(stdout: string): IdentityInfo | undefined {
 // --- secret redaction (DESIGN.md §9; same pattern set as the extension) -------
 
 /**
- * Conservative secret patterns replaced with [REDACTED]. Deliberately does NOT
- * touch the protocol's public currency: bare 64-hex identity ids, blake3: ids,
- * file_<32-hex> ids, 32-hex pipe ids, and roomtkt1 tickets.
+ * Conservative secret patterns replaced with [REDACTED]. The pattern set is
+ * ported EXACTLY from the extension's redact.ts (DESIGN.md §9: same set in
+ * both components). Deliberately does NOT touch the protocol's public
+ * currency: bare 64-hex identity ids, blake3: ids, file_<32-hex> ids, 32-hex
+ * pipe ids, and roomtkt1 tickets.
  */
 const REDACTION_PATTERNS: RegExp[] = [
+  /** PEM private key blocks (RSA/EC/OPENSSH/PGP/plain). */
   /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
+  /** AWS access key ids. */
   /\bAKIA[0-9A-Z]{16}\b/g,
-  /\bgh[pousr]_[A-Za-z0-9]{20,}\b/g,
-  /\bgithub_pat_[A-Za-z0-9_]{20,}\b/g,
-  /\bxox[baprs]-[A-Za-z0-9-]{10,}/g,
+  /** GitHub tokens (classic + fine-grained). */
+  /\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})\b/g,
+  /** Slack tokens. */
+  /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/g,
+  /** OpenAI/Anthropic-style secret keys. */
   /\bsk-[A-Za-z0-9_-]{20,}\b/g,
+  /** Bearer JWTs. */
   /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g,
 ];
 
-/** KEY=value / KEY: value pairs — keep the key name, redact the value. */
-const KEY_VALUE_PATTERN = /\b(api[_-]?key|token|secret|password)(\s*[=:]\s*)(\S{8,})/gi;
+/**
+ * Generic KEY/TOKEN/SECRET/PASSWORD = value pairs (case-insensitive; allows a
+ * prefix such as GITHUB_TOKEN or my-api-key, and JSON-style quoting). The key
+ * name and separator are kept; only the value is redacted. Values shorter
+ * than 8 characters are left alone to limit false positives.
+ */
+const KEY_VALUE_PATTERN = /\b([A-Za-z0-9_.-]*(?:api[_-]?key|token|secret|password))(["']?\s*[=:]\s*["']?)([^\s"']{8,})/gi;
 
 export function redact(text: string): string {
   let output = text;

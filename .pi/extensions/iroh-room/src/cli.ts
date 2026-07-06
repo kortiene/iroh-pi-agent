@@ -14,6 +14,14 @@ import { DEFAULT_TAIL_LIMIT, EXEC_TIMEOUT_MS } from "./constants.js";
 
 /* ------------------------------------------------------------------ */
 /* argv builders                                                       */
+/*                                                                     */
+/* Uniform convention (verified against the real binary): subcommand   */
+/* words first, every option in EQUALS form (--message=<m>), then a    */
+/* literal "--", then all positionals (ROOM, STATUS, MESSAGE, PATH,    */
+/* PIPE_ID). The "--" end-of-options separator makes clap treat        */
+/* leading-hyphen values ("- bullet list", "--help") as literal        */
+/* positionals instead of flags; equals form does the same for option  */
+/* values.                                                             */
 /* ------------------------------------------------------------------ */
 
 export function buildStatusArgs(input: {
@@ -23,32 +31,33 @@ export function buildStatusArgs(input: {
 	progress?: number;
 	artifactIds?: string[];
 }): string[] {
-	const args = ["agent", "status", input.room, input.status];
+	const args = ["agent", "status"];
 	if (input.message !== undefined) {
-		args.push("--message", input.message);
+		args.push(`--message=${input.message}`);
 	}
 	if (input.progress !== undefined) {
-		args.push("--progress", String(input.progress));
+		args.push(`--progress=${String(input.progress)}`);
 	}
 	for (const id of input.artifactIds ?? []) {
-		args.push("--artifact", id);
+		args.push(`--artifact=${id}`);
 	}
+	args.push("--", input.room, input.status);
 	return args;
 }
 
 export function buildSendArgs(input: { room: string; message: string }): string[] {
-	return ["room", "send", input.room, input.message];
+	return ["room", "send", "--", input.room, input.message];
 }
 
 export function buildTailArgs(input: { room: string; limit?: number }): string[] {
 	return [
 		"room",
 		"tail",
-		input.room,
 		"--offline",
 		"--json",
-		"--limit",
-		String(input.limit ?? DEFAULT_TAIL_LIMIT),
+		`--limit=${String(input.limit ?? DEFAULT_TAIL_LIMIT)}`,
+		"--",
+		input.room,
 	];
 }
 
@@ -58,13 +67,14 @@ export function buildShareArgs(input: {
 	name?: string;
 	mime?: string;
 }): string[] {
-	const args = ["file", "share", input.room, input.path];
+	const args = ["file", "share"];
 	if (input.name !== undefined) {
-		args.push("--name", input.name);
+		args.push(`--name=${input.name}`);
 	}
 	if (input.mime !== undefined) {
-		args.push("--mime", input.mime);
+		args.push(`--mime=${input.mime}`);
 	}
+	args.push("--", input.room, input.path);
 	return args;
 }
 
@@ -75,42 +85,47 @@ export function buildExposeArgs(input: {
 	label?: string;
 	ttlSeconds?: number;
 }): string[] {
-	const args = ["pipe", "expose", input.room, "--tcp", input.tcp];
+	const args = ["pipe", "expose", `--tcp=${input.tcp}`];
 	for (const id of input.allow) {
-		args.push("--allow", id);
+		args.push(`--allow=${id}`);
 	}
 	if (input.label !== undefined) {
-		args.push("--label", input.label);
+		args.push(`--label=${input.label}`);
 	}
 	if (input.ttlSeconds !== undefined) {
-		args.push("--expires", `${input.ttlSeconds}s`);
+		args.push(`--expires=${input.ttlSeconds}s`);
 	}
+	args.push("--", input.room);
 	return args;
 }
 
 export function buildCloseArgs(input: { pipeId: string }): string[] {
-	return ["pipe", "close", input.pipeId];
+	return ["pipe", "close", "--", input.pipeId];
 }
 
 export function buildMembersArgs(input: { room: string }): string[] {
-	return ["room", "members", input.room, "--json"];
+	return ["room", "members", "--json", "--", input.room];
 }
 
 export function buildFileListArgs(input: { room: string }): string[] {
-	return ["file", "list", input.room, "--json"];
+	return ["file", "list", "--json", "--", input.room];
 }
 
 export function buildPipeListArgs(input: { room: string }): string[] {
-	return ["pipe", "list", input.room];
+	return ["pipe", "list", "--", input.room];
 }
 
 export function buildWhoamiArgs(): string[] {
+	// No positionals, so no "--" separator is needed.
 	return ["identity", "show", "--json"];
 }
 
-/** Prepend the global --data-dir flag when a home dir is configured. */
+/**
+ * Prepend the global --data-dir flag (equals form, before the subcommand;
+ * verified against the real binary) when a home dir is configured.
+ */
 export function withDataDir(home: string | undefined, args: string[]): string[] {
-	return home === undefined ? args : ["--data-dir", home, ...args];
+	return home === undefined ? args : [`--data-dir=${home}`, ...args];
 }
 
 /* ------------------------------------------------------------------ */
