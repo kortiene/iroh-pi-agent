@@ -1,0 +1,21 @@
+{
+  "name": "pi-room-agent",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "description": "Headless iroh-room worker scaffold: polls a room tail, detects room-task blocks, and (future) drives Pi over RPC to execute them.",
+  "engines": {
+    "node": ">=20.19"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "start": "tsx src/main.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22",
+    "tsx": "^4",
+    "typescript": "^5",
+    "vitest": "^4"
+  }
+}
