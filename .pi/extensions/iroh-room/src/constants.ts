@@ -71,6 +71,15 @@ export const TOOL_NAMES = {
 	identityShow: "iroh_identity_show",
 } as const;
 
+/**
+ * Custom message types for the TUI transcript cards (rendered by
+ * src/tui/wire.ts; emitted by commands.ts). The `content` of these messages
+ * is LLM-visible and must contain zero room-authored text; room strings
+ * travel only in `details`, which never reaches the model.
+ */
+export const CARD_TYPE = "iroh-room.card";
+export const RECEIPT_TYPE = "iroh-room.receipt";
+
 export const COMMAND_NAMES = {
 	room: "room",
 	roomStatus: "room-status",
@@ -78,4 +87,56 @@ export const COMMAND_NAMES = {
 	roomArtifact: "room-artifact",
 	roomPreview: "room-preview",
 	roomTail: "room-tail",
+	roomPulse: "room-pulse",
 } as const;
+
+/* ------------------------------------------------------------------ */
+/* Room pulse (brief §4 M1). Cadences/backoff/ring sizes live here and */
+/* are constructor-injectable on RoomFeedStore / AmbientController for */
+/* tests (house precedent: PipeManager timeouts).                      */
+/* ------------------------------------------------------------------ */
+
+/** ctx.ui.setWidget key for the below-editor pulse widget. */
+export const PULSE_WIDGET_KEY = "iroh-room-pulse";
+/** ctx.ui.setStatus key for the footer pill. */
+export const PULSE_STATUS_KEY = "iroh-room";
+/** appendEntry customType persisting the chosen pulse density. */
+export const DENSITY_ENTRY_TYPE = "iroh-room.density";
+
+export const PULSE_DENSITIES = ["off", "pill", "1", "2"] as const;
+export type PulseDensity = (typeof PULSE_DENSITIES)[number];
+export const DEFAULT_PULSE_DENSITY: PulseDensity = "2";
+export const MAX_ROOM_LABEL_CHARS = 32;
+
+/** Ambient poll cadence; boosted after our own commands/tools run. */
+export const AMBIENT_POLL_MS = 5_000;
+export const BOOST_POLL_MS = 2_000;
+export const BOOST_WINDOW_MS = 30_000;
+/** Failure backoff ladder (streak 1..N; the last entry repeats). */
+export const BACKOFF_LADDER_MS = [5_000, 10_000, 20_000, 40_000, 60_000] as const;
+/** Snapshot is rendered stale once older than this many cadences. */
+export const STALE_AFTER_TICKS = 3;
+
+/** Seen-ring capacity (event ids ordered by (lamport ?? -1, event_id)). */
+export const SEEN_RING_CAPACITY = 2048;
+/** Deep poll (--limit) for session init and gap repair. */
+export const DEEP_TAIL_LIMIT = 500;
+/** Steady ambient poll --limit. */
+export const AMBIENT_TAIL_LIMIT = 100;
+
+/* ------------------------------------------------------------------ */
+/* M2 — signal + flows (brief §3, §4 M2).                              */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Completion-value shape for room task ids (U5): a deliberate tightening for
+ * COMPLETIONS ONLY — the grammar itself accepts any non-empty scalar, so
+ * non-conforming ids are dropped from completions, never from tracking.
+ */
+export const TASK_ID_COMPLETION_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/;
+/** `room members --json` poll runs on every Nth successful tail tick. */
+export const MEMBERS_POLL_EVERY_TICKS = 6;
+/** Per-kind toast cooldown for the M2 classifier (notify.ts). */
+export const TOAST_COOLDOWN_MS = 30_000;
+/** Unclaimed room-task cap (heuristic count; always ~-marked). */
+export const UNCLAIMED_TASK_CAP = 50;

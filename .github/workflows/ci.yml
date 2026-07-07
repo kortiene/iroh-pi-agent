@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: ${{ matrix.package.name }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        package:
+          - name: Pi extension
+            working-directory: .pi/extensions/iroh-room
+          - name: Headless worker
+            working-directory: tools/pi-room-agent
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ${{ matrix.package.working-directory }}/package-lock.json
+
+      - name: Install dependencies
+        working-directory: ${{ matrix.package.working-directory }}
+        run: npm ci
+
+      - name: Typecheck
+        working-directory: ${{ matrix.package.working-directory }}
+        run: npm run typecheck
+
+      - name: Test
+        working-directory: ${{ matrix.package.working-directory }}
+        run: npm test

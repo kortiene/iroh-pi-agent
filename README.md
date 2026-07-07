@@ -54,7 +54,15 @@ Then assign work by posting a `room-task` fenced block in the room and running
   troubleshooting.
 - [SPEC.md](SPEC.md) — the implementation spec this repo follows.
 
-Status: MVP — interactive extension, skill, and prompts are functional; the
-headless worker is a tested scaffold. Not implemented (by design, for now):
-`iroh_file_fetch`, live tail streaming, task scheduling, budget enforcement,
-sandboxing, multi-agent coordination.
+Status: MVP complete; post-MVP in progress. The interactive extension, skill,
+prompt templates, and Room Pulse TUI are functional and locally tested. The
+headless worker has real config, task parsing, status mapping, room-tail polling,
+and claim plumbing, but remains a tested scaffold until the Pi RPC drive is wired
+end-to-end.
+
+Quality gates: CI runs `npm ci`, `npm run typecheck`, and `npm test` for both
+`.pi/extensions/iroh-room` and `tools/pi-room-agent`.
+
+Not implemented (by design, for now): `iroh_file_fetch`, live tail streaming,
+Pi RPC task execution in the worker, task scheduling, budget enforcement,
+sandboxing, SDK-native integration, and multi-agent coordination.

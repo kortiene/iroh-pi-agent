@@ -13,7 +13,14 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { CONFIG_FILE_NAME, IDENTITY_ID_RE, ROOM_ID_RE } from "./constants.js";
+import {
+	CONFIG_FILE_NAME,
+	IDENTITY_ID_RE,
+	MAX_ROOM_LABEL_CHARS,
+	PULSE_DENSITIES,
+	ROOM_ID_RE,
+	type PulseDensity,
+} from "./constants.js";
 
 export type Env = Record<string, string | undefined>;
 
@@ -32,6 +39,10 @@ export interface ResolvedConfig {
 	artifactDir?: string;
 	/** Default --progress for agent.status when the caller passes none. */
 	defaultProgress?: number;
+	/** Display-only room label for the pulse (trimmed, <=32 chars, local). */
+	roomLabel?: string;
+	/** Initial pulse density default ("off" | "pill" | "1" | "2"). */
+	pulseDensity?: PulseDensity;
 	defaultPreviewHost: string;
 	defaultPreviewPort: number;
 	allowedPreviewMembers: string[];
@@ -47,6 +58,8 @@ interface RawConfigFile {
 	agent_name?: string;
 	artifact_dir?: string;
 	default_progress?: number;
+	room_label?: string;
+	pulse_density?: string;
 	default_preview_host?: string;
 	default_preview_port?: number;
 	allowed_preview_members?: string[];
@@ -148,6 +161,8 @@ export function readConfigFile(cwd: string): { raw: RawConfigFile; filePath?: st
 		agent_name: expectString(obj, "agent_name", filePath),
 		artifact_dir: expectString(obj, "artifact_dir", filePath),
 		default_progress: expectInteger(obj, "default_progress", filePath, 0, 100),
+		room_label: expectString(obj, "room_label", filePath),
+		pulse_density: expectString(obj, "pulse_density", filePath),
 		default_preview_host: expectString(obj, "default_preview_host", filePath),
 		default_preview_port: expectInteger(obj, "default_preview_port", filePath, 1, 65535),
 		allowed_preview_members: expectStringArray(obj, "allowed_preview_members", filePath),
@@ -195,6 +210,38 @@ function expandTildeOpt(value: string | undefined): string | undefined {
 	return value === undefined ? undefined : expandTilde(value);
 }
 
+/**
+ * Normalize a room label: trim, empty means unset, >32 chars fails closed.
+ * Display-only (the pulse shows it instead of roomId(8)); never sent anywhere.
+ */
+function normalizeRoomLabel(value: string | undefined, source: string): string | undefined {
+	if (value === undefined) {
+		return undefined;
+	}
+	const trimmed = value.trim();
+	if (trimmed === "") {
+		return undefined;
+	}
+	if (trimmed.length > MAX_ROOM_LABEL_CHARS) {
+		throw new Error(
+			`${source} must be at most ${MAX_ROOM_LABEL_CHARS} characters after trimming (got ${trimmed.length})`,
+		);
+	}
+	return trimmed;
+}
+
+function normalizePulseDensity(value: string | undefined, source: string): PulseDensity | undefined {
+	if (value === undefined) {
+		return undefined;
+	}
+	if (!(PULSE_DENSITIES as readonly string[]).includes(value)) {
+		throw new Error(
+			`${source} must be one of ${PULSE_DENSITIES.join(", ")} (got ${JSON.stringify(value)})`,
+		);
+	}
+	return value as PulseDensity;
+}
+
 /** Resolve the full config from env + config file. Throws on any invalid value. */
 export function resolveConfig(options: { cwd: string; env: Env }): ResolvedConfig {
 	const { cwd, env } = options;
@@ -226,6 +273,21 @@ export function resolveConfig(options: { cwd: string; env: Env }): ResolvedConfi
 		defaultProgress = Number(envProgress);
 	}
 
+	// Like room_id: a bad file value fails closed even when env overrides it.
+	const fileLabel = normalizeRoomLabel(raw.room_label, `${filePath ?? CONFIG_FILE_NAME}: "room_label"`);
+	const envLabel = normalizeRoomLabel(envValue(env, "IROH_ROOM_LABEL"), "IROH_ROOM_LABEL");
+	const roomLabel = envLabel ?? fileLabel;
+
+	const fileDensity = normalizePulseDensity(
+		raw.pulse_density,
+		`${filePath ?? CONFIG_FILE_NAME}: "pulse_density"`,
+	);
+	const envDensity = normalizePulseDensity(
+		envValue(env, "IROH_ROOM_PULSE_DENSITY"),
+		"IROH_ROOM_PULSE_DENSITY",
+	);
+	const pulseDensity = envDensity ?? fileDensity;
+
 	let allowedPreviewMembers = raw.allowed_preview_members ?? [];
 	const envMember = envValue(env, "IROH_ROOM_ALLOWED_PREVIEW_MEMBER");
 	if (envMember !== undefined) {
@@ -250,6 +312,8 @@ export function resolveConfig(options: { cwd: string; env: Env }): ResolvedConfi
 	if (agentName !== undefined) resolved.agentName = agentName;
 	if (artifactDir !== undefined) resolved.artifactDir = artifactDir;
 	if (defaultProgress !== undefined) resolved.defaultProgress = defaultProgress;
+	if (roomLabel !== undefined) resolved.roomLabel = roomLabel;
+	if (pulseDensity !== undefined) resolved.pulseDensity = pulseDensity;
 	if (filePath !== undefined) resolved.configFilePath = filePath;
 	return resolved;
 }

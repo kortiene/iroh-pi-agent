@@ -22,6 +22,9 @@
 			"@earendil-works/pi-coding-agent": [
 				"/Users/sekou/.asdf/installs/nodejs/22.22.3/lib/node_modules/@earendil-works/pi-coding-agent/dist/index.d.ts"
 			],
+			"@earendil-works/pi-tui": [
+				"/Users/sekou/.asdf/installs/nodejs/22.22.3/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-tui/dist/index.d.ts"
+			],
 			"@earendil-works/pi-ai": [
 				"/Users/sekou/.asdf/installs/nodejs/22.22.3/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/index.d.ts"
 			],

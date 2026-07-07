@@ -6,6 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `iroh-room-pi-harness`: the integration making **Pi Coding Agent** the default reference agent harness for `kortiene/iroh-room` (a peer-to-peer room substrate, sibling repo at `../iroh-room`). An invited room agent, powered by Pi, watches room events, claims `room-task` blocks, posts signed `agent.status` updates, shares artifacts, and exposes loopback-only preview pipes. `SPEC.md` is the requirements spec; `docs/pi-harness.md` is the authoritative usage/security doc.
 
+The extension also ships an ambient **Room Pulse TUI** (`src/tui/` — pulse widget, footer pill, transcript cards, toast classifier, heuristic task tracker; tests in `test/tui-*.test.mjs`). Design history: `docs/tui-cockpit-proposal.md`; executed spec: `docs/tui-pulse-brief.md`; usage: `docs/pi-harness.md` §Room Pulse TUI. Its untrusted-content chokepoint is `src/tui/sanitize.ts` (`roomText`) — every room-authored string must pass it before ANY UI surface, and card/receipt `content` (model-visible) must never carry room-authored text.
+
 ## Commands
 
 Extension (`.pi/extensions/iroh-room/` — self-contained, loaded raw by pi via jiti):
@@ -38,7 +40,7 @@ Skill scripts are standalone erasable TS run with plain `node` (Node ≥22.18 ty
 ## Cross-Package Contracts (enforced by tests — keep them in lockstep)
 
 - **argv convention** (both `.pi/extensions/iroh-room/src/cli.ts` and `tools/pi-room-agent/src/room-cli.ts`): options in *equals form* (`--message=<m>`), then a literal `--`, then positionals; global dir as `--data-dir=<abs>` before the subcommand. This is load-bearing: clap rejects hyphen-leading values otherwise (e.g. markdown-bullet messages). Any builder change must land identically in both files.
-- **room-task grammar**: `tools/pi-room-agent/src/task-parser.ts` is canonical; `.pi/skills/iroh-room-agent/scripts/parse-room-task.ts` is a grammar-identical standalone port. The conformance test (`tools/pi-room-agent/test/parser-conformance.test.ts`) spawns the script and diffs outputs — changing one without the other fails CI.
+- **room-task grammar** (THREE-way lockstep): `tools/pi-room-agent/src/task-parser.ts` is canonical; `.pi/skills/iroh-room-agent/scripts/parse-room-task.ts` is a grammar-identical standalone port; `.pi/extensions/iroh-room/src/tui/tasks.ts` re-implements fence detection + the id/type/title validity gate for the TUI task tracker. Conformance tests (`tools/pi-room-agent/test/parser-conformance.test.ts` and `.pi/extensions/iroh-room/test/tui-task-conformance.test.mjs`) spawn the script and diff outputs — changing one copy without the others fails CI.
 - **config semantics** (both `config.ts` files): precedence explicit arg > env > `.iroh-room-pi.json` (cwd) > default; empty-string env vars mean *unset*; leading `~` expanded for `iroh_rooms_home` / `iroh_rooms_bin` / `artifact_dir`; fail closed on missing room_id/binary and on unreadable-but-existing config.
 - **tool envelope**: success `{ok:true, event_id/file_id/pipe_id, stdout}`; CLI failure returns `{ok:false, exit_code, error_code}` (parsed from stderr `error[<code>]:`) — never thrown; local validation/config errors throw. All CLI output is redacted + capped to 8KB first.
 

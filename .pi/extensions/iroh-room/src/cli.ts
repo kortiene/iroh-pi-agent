@@ -231,6 +231,8 @@ export function parseTailJson(stdout: string): TailRow[] {
 export interface SnapshotEvent {
 	event_id: string;
 	type: string;
+	/** Protocol currency (logical clock); carried for ordering (M2 divider). */
+	lamport?: number;
 	author?: string;
 	timestamp?: string;
 	summary: string;
@@ -327,6 +329,7 @@ export function snapshotFromRows(
 			type: row.event_type ?? "unknown",
 			summary: summarizeTailRow(row),
 		};
+		if (typeof row.lamport === "number") event.lamport = row.lamport;
 		const author = row.display_name ?? row.from;
 		if (author !== undefined) event.author = author;
 		if (row.at !== undefined) event.timestamp = row.at;

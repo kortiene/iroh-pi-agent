@@ -157,6 +157,8 @@ Resolution order for every value:
 | `IROH_ROOM_DEFAULT_PROGRESS` | Default `--progress` for status posts when none is given. |
 | `IROH_ROOM_ALLOWED_PREVIEW_MEMBER` | Default allowed member (64-hex identity id) for `/room-preview`. |
 | `IROH_ROOM_ARTIFACT_DIR` | Extra directory (outside the workspace) whose files may **also** be shared as artifacts; files inside the workspace cwd are always shareable. Nothing is created on disk. The extension has no default; the worker defaults to `<cwd>/artifacts`. |
+| `IROH_ROOM_LABEL` | Display-only room label for the pulse widget/pill (trimmed, <= 32 chars). Local, never sent to the room. |
+| `IROH_ROOM_PULSE_DENSITY` | Initial pulse density: `off`, `pill`, `1`, or `2` (see [Room Pulse TUI](#room-pulse-tui)). |
 
 ### `.iroh-room-pi.json` keys (all optional)
 
@@ -172,6 +174,8 @@ Resolution order for every value:
 | `default_preview_port` | integer | e.g. `3000`. |
 | `allowed_preview_members` | string[] | 64-hex identity ids. |
 | `allow_artifact_paths_outside_workspace` | boolean | Default `false`; keep it that way unless you know why. |
+| `room_label` | string | Display-only label shown in the pulse instead of the room id's first 8 hex; trimmed, <= 32 chars. Local, never sent to the room. |
+| `pulse_density` | string | Initial pulse density: `off`, `pill`, `1`, or `2` (default `2`). A `/room-pulse` change during a session wins and persists per session. |
 
 Malformed JSON — or a config file that exists but cannot be read (e.g. broken
 permissions) — fails closed with an error naming the file. Unknown keys are
@@ -258,11 +262,65 @@ are closed on session shutdown.
 | `/room-artifact <path> [name]` | Share a file; quote arguments containing spaces. |
 | `/room-preview [--tcp 127.0.0.1:<port>] [--allow <64-hex>]... \| --close [pipe_id]` | Open a loopback preview pipe (defaults come from config), **or** close one/all with `--close` — an exclusive mode that cannot be combined with `--tcp`/`--allow`. |
 | `/room-tail [limit]` | Render a recent-events snapshot. |
+| `/room-pulse [off\|pill\|1\|2]` | Set the ambient pulse density; with no argument, cycle it (also bound to `ctrl+alt+r`). |
 
 A flag given without its value (e.g. a trailing `--tcp`) is a usage error, not
 a silent fallback to the config default. Free-text arguments (messages, status
 text) may start with `-`; they are passed to the CLI literally (see the argv
 note in [Tools](#tools)).
+
+In Pi's interactive TUI, `/room-preview` may also be given `--allow=`/`--close=`
+values via argument completion (member ids from the members poll, live pipe
+ids), `/room-send` completes `#<task-id>` from the heuristic task tracker, and
+running `/room-preview` without `--allow` offers a member picker (labels are
+identity-id prefixes lengthened until unique plus the role; the picker times
+out after 60 s and declines — fail closed). In non-TUI modes the commands
+behave exactly as the table above.
+
+## Room Pulse TUI
+
+In Pi's interactive TUI (and only there — RPC/JSON/print modes get none of
+this), the extension adds an ambient, output-only "room pulse":
+
+- **Pulse widget** (<= 2 lines below the editor) and a **footer pill**
+  (`iroh ● ○2~ ⇄1`): feed freshness glyph (`●` ok, `◌ data Ns old` stale,
+  `✗ poll failed (code) · retry Ns` failing, `⚙` broken config), latest
+  status/event one-liner, unclaimed-task count, live pipe count. Density is
+  controlled by `/room-pulse` / `ctrl+alt+r` (`off`, `pill`, `1`, `2`);
+  `off` tears the poll loop down entirely. The chosen density persists per
+  session; `pulse_density` config sets the initial default.
+- **Feed**: `room tail --offline --json --limit=100` every 5 s (a pure local
+  read — the admin is never contacted), boosted to 2 s for 30 s after any
+  `/room*` command or `iroh_*` tool, with 5→10→20→40→60 s backoff on failure
+  and one `feed failing` / `feed recovered` toast pair per episode. A deep
+  `--limit=500` poll seeds the session (backlog never toasts). Members are
+  polled every 6th successful tick. Note the offline tail folds the whole
+  room log per call, so cost grows with log size, not `--limit`.
+- **Transcript cards** replace text dumps for `/room` and `/room-tail`
+  (`ctrl+o` expands; a dim `── new since last look ──` divider marks events
+  newer than your previous `/room-tail`), and effectful commands
+  (`/room-status`, `/room-send`, `/room-artifact`, `/room-preview`) emit
+  one-line receipts so the *model* also sees what the human did.
+- **Toasts** (closed set, 30 s per-kind cooldown, batched): new claimable
+  task, `@you` mention (your identity's display name or 8-hex prefix), member
+  joined/removed (from the trusted members poll), one of *our* preview pipes
+  dying unexpectedly (from the trusted local pipe registry), feed
+  failing/recovered.
+- **Task counts are heuristic** and always rendered with a trailing `~`: the
+  tracker re-implements the canonical room-task grammar (fence rules and the
+  id/type/title validity gate) and a conformance test keeps it in lockstep
+  with the worker parser and the skill script.
+
+Security model (details in [Security notes](#security-notes)): every
+room-authored string crosses one sanitizer (`roomText`) before any UI
+surface — control/ANSI/C1 bytes, bidi overrides, and zero-width characters
+are stripped **before** secret redaction and invite-ticket masking, so a
+ticket or secret split by invisible characters still masks; room strings are
+never fed to a Markdown renderer, never become argv/keybindings/paths, and
+the model-visible `content` of cards/receipts carries counts and ids only,
+never room-authored text (which travels display-only). Invite tickets are
+masked at the UI layer even though tool envelopes deliberately pass them.
+Unconfigured projects get total silence — no widget, no polls, no toasts.
 
 ## Skill and prompt templates
 

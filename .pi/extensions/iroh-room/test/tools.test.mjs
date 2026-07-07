@@ -156,7 +156,7 @@ test("registerIrohTools registers exactly the 10 contract tools", () => {
 	assert.ok(pi.tools.find((tool) => tool.name === TOOL_NAMES.agentStatus).promptGuidelines.length > 0);
 });
 
-test("index.ts entry registers 10 tools + 6 commands + a session_shutdown handler", async () => {
+test("index.ts entry registers 10 tools + 7 commands + a session_shutdown handler", async () => {
 	const pi = stubPi();
 	entry.default(pi);
 	assert.equal(pi.tools.length, 10);
@@ -534,7 +534,7 @@ test("iroh_identity_show: CLI failure comes back as ok:false with the coded erro
 
 /* ------------------------------- slash commands ---------------------------- */
 
-test("registerIrohCommands registers the 6 contract commands", () => {
+test("registerIrohCommands registers the 7 contract commands (COMMAND_NAMES lockstep)", () => {
 	const { pi } = makeCommands([]);
 	assert.deepEqual(
 		pi.commands.map((command) => command.name).sort(),

@@ -43,6 +43,8 @@ import { resolveBinary, resolveConfig, resolveRoomId, type Env, type ResolvedCon
 import { STATUS_VOCABULARY, TOOL_NAMES } from "./constants.js";
 import { PipeManager } from "./pipes.js";
 import { redact, redactAndCap } from "./redact.js";
+import type { AmbientLike } from "./tui/ambient.js";
+import { toolRenderers } from "./tui/wire.js";
 import {
 	clampTailLimit,
 	validateAllowList,
@@ -68,12 +70,22 @@ export interface ToolDeps {
 	exec: ExecFn;
 	env: Env;
 	pipes: PipeManager;
+	/**
+	 * Ambient pulse controller, when one is wired (index.ts assigns it AFTER
+	 * construction — the controller shares this bundle's exec/env). opPipeClose
+	 * uses it to mark our own close as EXPECTED before touching the pipe
+	 * registry, so a boosted ambient tick during the multi-second close await
+	 * never toasts pipe_closed_own for our own action.
+	 */
+	ambient?: AmbientLike;
 }
 
 export interface IrohRoomOptions {
 	exec?: ExecFn;
 	env?: Env;
 	pipes?: PipeManager;
+	/** Ambient pulse controller (index.ts wires the real one; tests may fake it). */
+	ambient?: AmbientLike;
 }
 
 /** Build the dependency bundle; defaults wire pi.exec, process.env, a fresh PipeManager. */
@@ -82,6 +94,7 @@ export function makeDeps(pi: ExtensionAPI, options: IrohRoomOptions = {}): ToolD
 		exec: options.exec ?? ((command, args, execOptions) => pi.exec(command, args, execOptions)),
 		env: options.env ?? process.env,
 		pipes: options.pipes ?? new PipeManager(),
+		...(options.ambient !== undefined ? { ambient: options.ambient } : {}),
 	};
 }
 
@@ -277,6 +290,13 @@ export async function opPipeClose(
 ): Promise<Envelope> {
 	const pipeId = validatePipeId(input.pipe_id);
 	if (deps.pipes.has(pipeId)) {
+		// Our own close: mark it EXPECTED before the close starts —
+		// PipeManager.close() removes the registry entry synchronously and
+		// then waits up to ~7s (SIGINT grace + hard fallback) for the child,
+		// so an ambient tick landing mid-await must find the suppression
+		// entry already in place. The tool_execution_end feed in index.ts
+		// stays as belt-and-braces (mirrors /room-preview --close).
+		deps.ambient?.noteExpectedPipeClose?.(pipeId);
 		await deps.pipes.close(pipeId);
 		return { ok: true, pipe_id: pipeId, closed: "local", stdout: "" };
 	}
@@ -404,6 +424,7 @@ export function registerIrohTools(pi: ExtensionAPI, options: IrohRoomOptions = {
 
 	pi.registerTool({
 		name: TOOL_NAMES.agentStatus,
+		...toolRenderers(TOOL_NAMES.agentStatus),
 		label: "Iroh agent status",
 		description:
 			"Post a signed agent.status event to the configured iroh-room. Use the advisory vocabulary " +
@@ -435,6 +456,7 @@ export function registerIrohTools(pi: ExtensionAPI, options: IrohRoomOptions = {
 
 	pi.registerTool({
 		name: TOOL_NAMES.roomSend,
+		...toolRenderers(TOOL_NAMES.roomSend),
 		label: "Iroh room send",
 		description: "Send a human-readable message (1..16384 bytes) to the configured iroh-room.",
 		promptSnippet: "iroh_room_send — send a plain room message to the configured iroh-room",
@@ -451,6 +473,7 @@ export function registerIrohTools(pi: ExtensionAPI, options: IrohRoomOptions = {
 
 	pi.registerTool({
 		name: TOOL_NAMES.tailSnapshot,
+		...toolRenderers(TOOL_NAMES.tailSnapshot),
 		label: "Iroh room tail snapshot",
 		description:
 			"Read recent room events (offline, from the local log) and return a compact snapshot: " +
@@ -474,6 +497,7 @@ export function registerIrohTools(pi: ExtensionAPI, options: IrohRoomOptions = {
 
 	pi.registerTool({
 		name: TOOL_NAMES.fileShare,
+		...toolRenderers(TOOL_NAMES.fileShare),
 		label: "Iroh file share",
 		description:
 			"Share a local file with the room as a content-addressed artifact (max 100 MiB). " +
@@ -494,6 +518,7 @@ export function registerIrohTools(pi: ExtensionAPI, options: IrohRoomOptions = {
 
 	pi.registerTool({
 		name: TOOL_NAMES.pipeExpose,
+		...toolRenderers(TOOL_NAMES.pipeExpose),
 		label: "Iroh pipe expose",
 		description:
 			"Expose a local loopback (127.0.0.1:<port>) preview server to explicitly allowed room members " +
@@ -523,6 +548,7 @@ export function registerIrohTools(pi: ExtensionAPI, options: IrohRoomOptions = {
 
 	pi.registerTool({
 		name: TOOL_NAMES.pipeClose,
+		...toolRenderers(TOOL_NAMES.pipeClose),
 		label: "Iroh pipe close",
 		description:
 			"Close a pipe: pipes opened by this session are terminated locally (SIGINT); " +
@@ -539,6 +565,7 @@ export function registerIrohTools(pi: ExtensionAPI, options: IrohRoomOptions = {
 
 	pi.registerTool({
 		name: TOOL_NAMES.pipeList,
+		...toolRenderers(TOOL_NAMES.pipeList),
 		label: "Iroh pipe list",
 		description: "List open pipes in the room (CLI view) plus the pipes owned by this session.",
 		parameters: Type.Object({ room_id: roomIdParam() }),
@@ -551,6 +578,7 @@ export function registerIrohTools(pi: ExtensionAPI, options: IrohRoomOptions = {
 
 	pi.registerTool({
 		name: TOOL_NAMES.roomMembers,
+		...toolRenderers(TOOL_NAMES.roomMembers),
 		label: "Iroh room members",
 		description: "List room members (offline read of the local log) with roles and statuses.",
 		parameters: Type.Object({ room_id: roomIdParam() }),
@@ -563,6 +591,7 @@ export function registerIrohTools(pi: ExtensionAPI, options: IrohRoomOptions = {
 
 	pi.registerTool({
 		name: TOOL_NAMES.fileList,
+		...toolRenderers(TOOL_NAMES.fileList),
 		label: "Iroh file list",
 		description: "List the room's shared files (file ids, names, sizes, providers).",
 		parameters: Type.Object({ room_id: roomIdParam() }),
@@ -575,6 +604,7 @@ export function registerIrohTools(pi: ExtensionAPI, options: IrohRoomOptions = {
 
 	pi.registerTool({
 		name: TOOL_NAMES.identityShow,
+		...toolRenderers(TOOL_NAMES.identityShow),
 		label: "Iroh identity show",
 		description: "Show the local iroh-rooms identity (name, identity_id, device_id).",
 		parameters: Type.Object({}),

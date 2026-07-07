@@ -217,6 +217,70 @@ test("resolveBinary: falls back to PATH scan, else fails closed with all three o
 	);
 });
 
+test("room_label: file + env precedence, trimming, empty means unset", async () => {
+	const cwd = await makeCwd({ room_id: ROOM_ID, room_label: "  demo room  " });
+	assert.equal(resolveConfig({ cwd, env: {} }).roomLabel, "demo room");
+	// env beats file
+	assert.equal(resolveConfig({ cwd, env: { IROH_ROOM_LABEL: "env-label" } }).roomLabel, "env-label");
+	// empty env string means unset (falls back to the file value)
+	assert.equal(resolveConfig({ cwd, env: { IROH_ROOM_LABEL: "" } }).roomLabel, "demo room");
+	// whitespace-only file value means unset
+	const blank = await makeCwd({ room_label: "   " });
+	assert.equal(resolveConfig({ cwd: blank, env: {} }).roomLabel, undefined);
+	// absent everywhere means unset
+	const none = await makeCwd({ room_id: ROOM_ID });
+	assert.equal(resolveConfig({ cwd: none, env: {} }).roomLabel, undefined);
+});
+
+test("room_label longer than 32 chars (after trim) fails closed, file and env", async () => {
+	const long = "x".repeat(33);
+	const cwd = await makeCwd({ room_label: long });
+	assert.throws(() => resolveConfig({ cwd, env: {} }), /"room_label".*32 characters/s);
+	const cwd2 = await makeCwd();
+	assert.throws(
+		() => resolveConfig({ cwd: cwd2, env: { IROH_ROOM_LABEL: long } }),
+		/IROH_ROOM_LABEL.*32 characters/s,
+	);
+	// a bad FILE value fails closed even when env overrides it (room_id semantics)
+	assert.throws(() => resolveConfig({ cwd, env: { IROH_ROOM_LABEL: "fine" } }), /"room_label"/);
+	// wrong type names the key
+	const cwd3 = await makeCwd({ room_label: 42 });
+	assert.throws(() => resolveConfig({ cwd: cwd3, env: {} }), /"room_label" must be a string/);
+	// exactly 32 chars is accepted
+	const cwd4 = await makeCwd({ room_label: "y".repeat(32) });
+	assert.equal(resolveConfig({ cwd: cwd4, env: {} }).roomLabel, "y".repeat(32));
+});
+
+test("pulse_density: file + env precedence over the four valid values; empty env means unset", async () => {
+	const cwd = await makeCwd({ pulse_density: "pill" });
+	assert.equal(resolveConfig({ cwd, env: {} }).pulseDensity, "pill");
+	assert.equal(
+		resolveConfig({ cwd, env: { IROH_ROOM_PULSE_DENSITY: "off" } }).pulseDensity,
+		"off",
+	);
+	assert.equal(resolveConfig({ cwd, env: { IROH_ROOM_PULSE_DENSITY: "" } }).pulseDensity, "pill");
+	for (const density of ["off", "pill", "1", "2"]) {
+		const each = await makeCwd({ pulse_density: density });
+		assert.equal(resolveConfig({ cwd: each, env: {} }).pulseDensity, density);
+	}
+	const none = await makeCwd();
+	assert.equal(resolveConfig({ cwd: none, env: {} }).pulseDensity, undefined);
+});
+
+test("invalid pulse_density fails closed, file and env, naming the valid values", async () => {
+	const cwd = await makeCwd({ pulse_density: "3" });
+	assert.throws(() => resolveConfig({ cwd, env: {} }), /"pulse_density" must be one of off, pill, 1, 2/);
+	const cwd2 = await makeCwd();
+	assert.throws(
+		() => resolveConfig({ cwd: cwd2, env: { IROH_ROOM_PULSE_DENSITY: "dense" } }),
+		/IROH_ROOM_PULSE_DENSITY must be one of off, pill, 1, 2/,
+	);
+	// a bad FILE value fails closed even when env overrides it
+	assert.throws(() => resolveConfig({ cwd, env: { IROH_ROOM_PULSE_DENSITY: "2" } }), /"pulse_density"/);
+	const cwd3 = await makeCwd({ pulse_density: 2 });
+	assert.throws(() => resolveConfig({ cwd: cwd3, env: {} }), /"pulse_density" must be a string/);
+});
+
 test("leading ~ is expanded for home, bin, and artifact dir (env and file), not mid-path", async () => {
 	const { homedir } = await import("node:os");
 	const home = homedir();
