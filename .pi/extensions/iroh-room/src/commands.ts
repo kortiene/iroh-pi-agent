@@ -654,14 +654,14 @@ export function registerIrohCommands(pi: ExtensionAPI, options: IrohRoomOptions 
 	});
 
 	const cockpitUsage =
-		"usage: /room-cockpit [open|close|refresh|tab overview|tab timeline|tab tasks|tab health]";
+		"usage: /room-cockpit [open|overlay|close|refresh|tab overview|tab timeline|tab tasks|tab health]";
 	const isCockpitTab = (value: string | undefined): value is CockpitTab =>
 		value !== undefined && (COCKPIT_TABS as readonly string[]).includes(value);
 
 	pi.registerCommand(COMMAND_NAMES.roomCockpit, {
 		description: "Open the read-only iroh-room cockpit (TUI mode only)",
 		getArgumentCompletions: (prefix) => {
-			const values = ["open", "close", "refresh", "tab", ...COCKPIT_TABS];
+			const values = ["open", "overlay", "close", "refresh", "tab", ...COCKPIT_TABS];
 			const items = values.filter((value) => value.startsWith(prefix)).map((value) => ({ value, label: value }));
 			return items.length > 0 ? items : null;
 		},
@@ -681,6 +681,11 @@ export function registerIrohCommands(pi: ExtensionAPI, options: IrohRoomOptions 
 			if (subcommand === "open") {
 				ambient?.boost();
 				await cockpit.open("full", ctx);
+				return;
+			}
+			if (subcommand === "overlay") {
+				ambient?.boost();
+				await cockpit.open("overlay", ctx);
 				return;
 			}
 			if (subcommand === "close") {

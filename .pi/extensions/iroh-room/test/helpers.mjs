@@ -212,8 +212,22 @@ export function stubCtx(overrides = {}) {
 			};
 			const theme = { fg: (_color, text) => text, bold: (text) => text };
 			const done = (result) => settle(result);
+			const handle = options?.overlay === true ? {
+				calls: [],
+				hidden: false,
+				focused: false,
+				hide() { this.calls.push("hide"); this.hidden = true; },
+				setHidden(hidden) { this.calls.push(`setHidden:${String(hidden)}`); this.hidden = hidden; },
+				isHidden() { return this.hidden; },
+				focus() { this.calls.push("focus"); this.focused = true; },
+				unfocus() { this.calls.push("unfocus"); this.focused = false; },
+				isFocused() { return this.focused; },
+			} : undefined;
+			if (handle !== undefined) {
+				options?.onHandle?.(handle);
+			}
 			Promise.resolve(factory(tui, theme, {}, done)).then((component) => {
-				customComponents.push({ component, options, tui, done });
+				customComponents.push({ component, options, tui, done, handle });
 			});
 			return promise;
 		},

@@ -41,7 +41,12 @@ export class CockpitController implements CockpitControllerLike {
 
 	async open(mode: CockpitMode, ctx: ExtensionContext): Promise<void> {
 		if (this.openPromise !== undefined) {
-			this.overlayHandle?.focus();
+			try {
+				this.overlayHandle?.setHidden(false);
+				this.overlayHandle?.focus();
+			} catch {
+				// stale overlay handle after reload; cleanup will clear it
+			}
 			this.component?.setSnapshot(this.dataSource.getSnapshot());
 			this.safeRender();
 			void this.dataSource.requestRefresh();
