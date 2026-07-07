@@ -432,10 +432,14 @@ test("PipeManager: constructor parseTimeoutMs applies when expose passes no over
 test("PipeManager.close: a child that ignores SIGINT is SIGKILLed after the (injectable) grace", async () => {
 	const graceMs = 250;
 	const pipes = new PipeManager({ closeGraceMs: graceMs });
-	// A child that prints the pipe_id block, traps SIGINT, and stays alive.
+	// A child that traps SIGINT, prints the pipe_id block, and stays alive.
+	// Install the handler before printing pipe_id; expose() resolves as soon as
+	// stdout carries pipe_id, so reversing the order races close() against the
+	// fixture setup and makes the grace-period assertion flaky.
 	const script =
+		'process.on("SIGINT", () => {}); ' +
 		`process.stdout.write("child_pid: " + process.pid + "\\npipe_id: ${PIPE_ID}\\n"); ` +
-		'process.on("SIGINT", () => {}); setInterval(() => {}, 1000);';
+		'setInterval(() => {}, 1000);';
 	const { record, stdout } = await pipes.expose({
 		bin: process.execPath,
 		args: ["-e", script],
