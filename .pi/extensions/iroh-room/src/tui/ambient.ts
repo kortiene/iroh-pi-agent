@@ -40,6 +40,7 @@ import {
 	parseJsonLine,
 	parseTailJson,
 	runCli,
+	summarizeTailRow,
 	type ExecFn,
 	type TailRow,
 } from "../cli.js";
@@ -72,7 +73,15 @@ import {
 } from "./feed.js";
 import { ToastClassifier, type Toast } from "./notify.js";
 import { renderPill, renderPulse, type PulseView } from "./pulse.js";
-import { TaskTracker } from "./tasks.js";
+import { TaskTracker, type DetectedTask } from "./tasks.js";
+import type {
+	AgentStatusSummary,
+	CockpitDataSource,
+	CockpitSnapshot,
+	FileSummary,
+	TaskSummary,
+	TimelineEvent,
+} from "./cockpit/model.js";
 import { fitWidth, themeStyler } from "./wire.js";
 
 /** Injectable timer shim; the default wraps setTimeout and unref()s. */
@@ -112,7 +121,7 @@ export interface TailLookEvent {
  * members/tasks/pipe/divider methods are OPTIONAL so minimal recorder fakes
  * keep working (callers use optional chaining).
  */
-export interface AmbientLike {
+export interface AmbientLike extends CockpitDataSource {
 	onSessionStart(event: unknown, ctx: ExtensionContext): Promise<void>;
 	boost(): void;
 	getDensity(): PulseDensity;
@@ -156,6 +165,65 @@ function errText(err: unknown): string {
 	return err instanceof Error ? err.message : String(err);
 }
 
+function cloneRow(row: TailRow): TailRow {
+	return { ...row };
+}
+
+function deepFreeze<T>(value: T): T {
+	if (value === null || typeof value !== "object") {
+		return value;
+	}
+	Object.freeze(value);
+	for (const nested of Object.values(value as Record<string, unknown>)) {
+		deepFreeze(nested);
+	}
+	return value;
+}
+
+function timelineEventFromRow(row: TailRow): TimelineEvent {
+	const event: TimelineEvent = {
+		type: typeof row.event_type === "string" ? row.event_type : "unknown",
+		summary: summarizeTailRow(row),
+	};
+	if (typeof row.event_id === "string") event.eventId = row.event_id;
+	if (typeof row.lamport === "number") event.lamport = row.lamport;
+	const author = row.display_name ?? row.from;
+	if (typeof author === "string") event.author = author;
+	if (typeof row.at === "string") event.timestamp = row.at;
+	return event;
+}
+
+function statusSummaryFromRow(row: TailRow | undefined): AgentStatusSummary | undefined {
+	if (row === undefined) return undefined;
+	const label = typeof row.state === "string" ? row.state : undefined;
+	if (label === undefined) return undefined;
+	const status: AgentStatusSummary = { label };
+	if (typeof row.progress === "number") status.progress = row.progress;
+	if (typeof row.message === "string") status.message = row.message;
+	const author = row.display_name ?? row.from;
+	if (typeof author === "string") status.author = author;
+	if (typeof row.at === "string") status.timestamp = row.at;
+	if (typeof row.event_id === "string") status.eventId = row.event_id;
+	return status;
+}
+
+function taskSummary(task: DetectedTask, state: TaskSummary["state"]): TaskSummary {
+	return { id: task.id, type: task.type, title: task.title, state };
+}
+
+function fileSummaryFromRow(row: TailRow): FileSummary | undefined {
+	if (row.event_type !== "file.shared") return undefined;
+	const file: FileSummary = {};
+	if (typeof row.file_id === "string") file.id = row.file_id;
+	else if (typeof row.blob_hash === "string") file.id = row.blob_hash;
+	if (typeof row.file_name === "string") file.name = row.file_name;
+	if (typeof row.name === "string" && file.name === undefined) file.name = row.name;
+	if (typeof row.size_bytes === "number") file.sizeBytes = row.size_bytes;
+	if (typeof row.mime === "string") file.mime = row.mime;
+	if (typeof row.provider === "string") file.provider = row.provider;
+	return Object.keys(file).length === 0 ? undefined : file;
+}
+
 export class AmbientController implements AmbientLike {
 	private readonly env: Env;
 	private readonly exec: ExecFn | undefined;
@@ -177,10 +245,13 @@ export class AmbientController implements AmbientLike {
 	/** ui reference kept for teardown even in broken-config mode. */
 	private ui: ExtensionContext["ui"] | undefined;
 	private cfg: ResolvedConfig | undefined;
+	private configError: string | undefined;
+	private lastBinary: string | undefined;
 	private active = false;
 
 	private running = false;
 	private inFlight = false;
+	private inFlightPromise: Promise<void> | undefined;
 	/** Bumped by teardown(): a poll that outlives its session is stale and
 	 * must not touch the store, flags, chain, or surfaces when it resumes. */
 	private epoch = 0;
@@ -214,6 +285,12 @@ export class AmbientController implements AmbientLike {
 	private prevPipeIds: Set<string> | undefined;
 	/** Max (lamport, event_id) of the last /room-tail card (divider record). */
 	private tailLook: TailLookMark | undefined;
+	/** Last successful tail rows copied for cockpit timeline rendering. */
+	private currentRows: TailRow[] = [];
+	/** Identity fetched once per session; displayed by the cockpit. */
+	private identity: CockpitSnapshot["identity"] | undefined;
+	/** Cockpit subscribers; no timers or polling owned here. */
+	private readonly subscribers = new Set<() => void>();
 	/** The @mention provider registers ONCE per process: host-side provider
 	 * factories accumulate with no unregister (pi types.d.ts:135). */
 	private mentionProviderRegistered = false;
@@ -254,18 +331,22 @@ export class AmbientController implements AmbientLike {
 		} catch (err) {
 			// Broken config: one warning toast + dim pill, nothing else.
 			this.ui = ctx.ui;
+			this.configError = errText(err);
+			this.notifySubscribers();
 			this.safeUi(() => {
 				ctx.ui.notify(`iroh-room: config error — ${errText(err)} (pulse disabled)`, "warning");
 				ctx.ui.setStatus(PULSE_STATUS_KEY, renderPill(this.brokenView()));
 			});
 			return;
 		}
+		this.cfg = cfg;
 		if (cfg.roomId === undefined) {
+			this.notifySubscribers();
 			return; // unconfigured: total silence
 		}
 		this.ctx = ctx;
 		this.ui = ctx.ui;
-		this.cfg = cfg;
+		this.configError = undefined;
 		this.active = true;
 		this.registerMentionProvider(ctx);
 		this.density = this.restoreDensity(ctx, cfg);
@@ -417,6 +498,116 @@ export class AmbientController implements AmbientLike {
 		return previous;
 	}
 
+	getSnapshot(): CockpitSnapshot {
+		const feed = this.store.snapshot();
+		const state = this.cockpitFeedState(feed);
+		const events = this.currentRows.map((row) => timelineEventFromRow(row));
+		const latestRow = this.currentRows[this.currentRows.length - 1] ?? feed.latestRow;
+		const files = this.currentRows
+			.map((row) => fileSummaryFromRow(row))
+			.filter((file): file is FileSummary => file !== undefined);
+		const unclaimed = this.tracker.unclaimed().map((task) => taskSummary(task, "backlog"));
+		const claimed = this.tracker.claimed().map((task) => taskSummary(task, "claimed"));
+		const readyForReview = this.tracker.readyForReview().map((task) => taskSummary(task, "ready_for_review"));
+		const done = this.tracker.done().map((task) => taskSummary(task, "done"));
+		const byId = new Map<string, TaskSummary>();
+		for (const task of [...unclaimed, ...claimed, ...readyForReview, ...done]) {
+			byId.set(task.id, task);
+		}
+		for (const task of this.tracker.all()) {
+			if (!byId.has(task.id)) byId.set(task.id, taskSummary(task, "backlog"));
+		}
+		const snapshot: CockpitSnapshot = {
+			config: {
+				...(this.cfg?.roomId !== undefined ? { roomId: this.cfg.roomId } : {}),
+				...(this.cfg?.roomLabel !== undefined ? { roomLabel: this.cfg.roomLabel } : {}),
+				...(this.lastBinary !== undefined ? { binary: this.lastBinary } : this.cfg?.binOverride !== undefined ? { binary: this.cfg.binOverride } : {}),
+				...(this.cfg?.home !== undefined ? { dataDir: this.cfg.home } : {}),
+				...(this.cfg?.agentName !== undefined ? { agentName: this.cfg.agentName } : {}),
+				...(this.cfg?.configFilePath !== undefined ? { configFile: this.cfg.configFilePath } : {}),
+				...(this.cfg?.cwd !== undefined ? { cwd: this.cfg.cwd } : {}),
+			},
+			...(this.identity !== undefined ? { identity: { ...this.identity } } : {}),
+			feed: {
+				state,
+				...(feed.lastOkAt !== undefined ? { lastOkAt: feed.lastOkAt } : {}),
+				...(this.nextPollAt !== undefined ? { nextRetryAt: this.nextPollAt } : {}),
+				...(this.configError !== undefined
+					? { failure: this.configError }
+					: feed.failure !== undefined
+						? { failure: describePollFailure(feed.failure) }
+						: {}),
+				gap: feed.gap,
+				rowCount: feed.rowCount,
+				seenCount: feed.seenCount,
+			},
+			latest: {
+				...(statusSummaryFromRow(feed.latestStatusRow) !== undefined
+					? { status: statusSummaryFromRow(feed.latestStatusRow) }
+					: {}),
+				...(latestRow !== undefined ? { event: timelineEventFromRow(latestRow) } : {}),
+			},
+			tasks: {
+				all: [...byId.values()],
+				unclaimed,
+				claimed,
+				readyForReview,
+				done,
+			},
+			members: [...(this.members ?? new Map<string, string>())].map(([id, role]) => ({ id, role })),
+			files,
+			pipes: (this.pipes?.list() ?? []).map((pipe) => ({
+				id: pipe.pipeId,
+				target: pipe.target,
+				...(pipe.label !== undefined ? { label: pipe.label } : {}),
+				state: "open" as const,
+				trustedLocal: true,
+				startedAt: pipe.startedAt,
+			})),
+			events,
+		};
+		return deepFreeze(snapshot);
+	}
+
+	async requestRefresh(): Promise<void> {
+		if (this.inFlightPromise !== undefined) {
+			return this.inFlightPromise;
+		}
+		if (this.ctx === undefined || this.cfg === undefined || this.cfg.roomId === undefined) {
+			return;
+		}
+		if (this.timerHandle !== undefined) {
+			this.timers.clear(this.timerHandle);
+			this.timerHandle = undefined;
+		}
+		await this.tick(true);
+	}
+
+	subscribe(listener: () => void): () => void {
+		this.subscribers.add(listener);
+		return () => {
+			this.subscribers.delete(listener);
+		};
+	}
+
+	private cockpitFeedState(feed: ReturnType<RoomFeedStore["snapshot"]>): CockpitSnapshot["feed"]["state"] {
+		if (this.configError !== undefined) return "broken_config";
+		if (this.cfg?.roomId === undefined) return "unconfigured";
+		if (feed.failure !== undefined) return "failing";
+		if (feed.lastOkAt !== undefined && this.now() - feed.lastOkAt > this.staleAfterMs) return "stale";
+		return "ok";
+	}
+
+	private notifySubscribers(): void {
+		for (const listener of this.subscribers) {
+			try {
+				listener();
+			} catch {
+				// one stale cockpit listener must not break the poll loop
+			}
+		}
+	}
+
 	/* ----------------------------- density ----------------------------- */
 
 	private restoreDensity(ctx: ExtensionContext, cfg: ResolvedConfig): PulseDensity {
@@ -508,58 +699,67 @@ export class AmbientController implements AmbientLike {
 	}
 
 	/** One poll. Single-flight; never rejects; reschedules itself (chain). */
-	private async tick(): Promise<void> {
-		if (!this.running || this.ctx === undefined || this.cfg === undefined) {
+	private async tick(manual = false): Promise<void> {
+		if ((!this.running && !manual) || this.ctx === undefined || this.cfg === undefined) {
 			return;
 		}
 		if (this.inFlight) {
+			if (this.inFlightPromise !== undefined) await this.inFlightPromise;
 			return; // overlapping invocation (boost/timer race): never double-run
 		}
 		this.inFlight = true;
 		const epoch = this.epoch;
 		this.timerHandle = undefined;
-		try {
-			// pipe_closed_own runs on EVERY tick (trusted local state, brief §3):
-			// an own-pipe death must toast even while the tail poll is failing.
-			const closedOwn = this.diffPipes();
-			if (closedOwn.length > 0) {
-				this.emitToasts(
-					this.classifier.classify({
-						now: this.now(),
-						freshRows: [],
-						closedOwnPipes: closedOwn,
-					}),
-				);
-			}
-			await this.poll(epoch);
-		} catch (err) {
-			// poll() maps everything itself; this is a belt-and-braces guard so
-			// a chained timer callback can never become an unhandled rejection.
-			if (this.pollValid(epoch)) {
-				this.recordFailure(classifyPollError(err));
-			}
-		} finally {
-			// A stale tick (teardown bumped the epoch mid-flight) must not
-			// clobber the new session's single-flight flag, chain a timer onto
-			// its loop, or repaint its surfaces.
-			if (epoch === this.epoch) {
-				this.inFlight = false;
-				if (this.running) {
-					this.schedule(this.currentDelay());
+		const work = (async (): Promise<void> => {
+			try {
+				// pipe_closed_own runs on EVERY tick (trusted local state, brief §3):
+				// an own-pipe death must toast even while the tail poll is failing.
+				const closedOwn = this.diffPipes();
+				if (closedOwn.length > 0) {
+					this.emitToasts(
+						this.classifier.classify({
+							now: this.now(),
+							freshRows: [],
+							closedOwnPipes: closedOwn,
+						}),
+					);
 				}
-				this.updateSurfaces();
+				await this.poll(epoch, manual);
+			} catch (err) {
+				// poll() maps everything itself; this is a belt-and-braces guard so
+				// a chained timer callback can never become an unhandled rejection.
+				if (this.pollValid(epoch, manual)) {
+					this.recordFailure(classifyPollError(err));
+				}
+			} finally {
+				// A stale tick (teardown bumped the epoch mid-flight) must not
+				// clobber the new session's single-flight flag, chain a timer onto
+				// its loop, or repaint its surfaces.
+				if (epoch === this.epoch) {
+					this.inFlight = false;
+					this.inFlightPromise = undefined;
+					if (this.running) {
+						this.schedule(this.currentDelay());
+					}
+					this.updateSurfaces();
+					this.notifySubscribers();
+				}
 			}
-		}
+		})();
+		this.inFlightPromise = work;
+		await work;
 	}
 
 	/** A poll resuming after its await may act only while its epoch is
 	 * current AND the loop still runs (teardown or density-off mid-flight
-	 * silences it: no store writes, no toasts, no failStreak). */
-	private pollValid(epoch: number): boolean {
-		return epoch === this.epoch && this.running;
+	 * silences it: no store writes, no toasts, no failStreak). Manual cockpit
+	 * refreshes are one-shot polls through the same path and stay valid without
+	 * turning the chained loop on. */
+	private pollValid(epoch: number, manual = false): boolean {
+		return epoch === this.epoch && (this.running || manual);
 	}
 
-	private async poll(epoch: number): Promise<void> {
+	private async poll(epoch: number, manual = false): Promise<void> {
 		const cfg = this.cfg as ResolvedConfig;
 		const exec = this.exec;
 		if (exec === undefined || cfg.roomId === undefined) {
@@ -570,13 +770,14 @@ export class AmbientController implements AmbientLike {
 		let bin: string;
 		try {
 			bin = resolveBinary(cfg, this.env);
+			this.lastBinary = bin;
 			// Identity fetch (brief §3.3): ONCE per session, at ambient init —
 			// the first tick that reaches a resolved binary. Failure => mention
 			// detection silently off; never a feed failure.
 			if (!this.identityAttempted) {
 				this.identityAttempted = true;
-				await this.fetchIdentity(epoch, exec, bin, cfg);
-				if (!this.pollValid(epoch)) {
+				await this.fetchIdentity(epoch, exec, bin, cfg, manual);
+				if (!this.pollValid(epoch, manual)) {
 					return;
 				}
 			}
@@ -584,7 +785,7 @@ export class AmbientController implements AmbientLike {
 				...(cfg.home !== undefined ? { home: cfg.home } : {}),
 				cwd: cfg.cwd,
 			});
-			if (!this.pollValid(epoch)) {
+			if (!this.pollValid(epoch, manual)) {
 				return; // stale (restart) or silenced (density off) mid-flight
 			}
 			if (!run.ok) {
@@ -593,11 +794,12 @@ export class AmbientController implements AmbientLike {
 			}
 			rows = parseTailJson(run.stdout);
 		} catch (err) {
-			if (this.pollValid(epoch)) {
+			if (this.pollValid(epoch, manual)) {
 				this.recordFailure(classifyPollError(err));
 			}
 			return;
 		}
+		this.currentRows = rows.map(cloneRow);
 		const hadFailure = this.store.snapshot().failure !== undefined;
 		this.failStreak = 0;
 		this.needsDeep = false;
@@ -621,8 +823,8 @@ export class AmbientController implements AmbientLike {
 		let memberJoined: string[] = [];
 		let memberRemoved: string[] = [];
 		if (this.tailSuccessCount % this.membersEvery === 0) {
-			const diff = await this.pollMembers(epoch, exec, bin, cfg);
-			if (!this.pollValid(epoch)) {
+			const diff = await this.pollMembers(epoch, exec, bin, cfg, manual);
+			if (!this.pollValid(epoch, manual)) {
 				return;
 			}
 			memberJoined = diff.joined;
@@ -650,16 +852,17 @@ export class AmbientController implements AmbientLike {
 		exec: ExecFn,
 		bin: string,
 		cfg: ResolvedConfig,
+		manual = false,
 	): Promise<void> {
 		try {
 			const run = await runCli(exec, bin, buildWhoamiArgs(), {
 				...(cfg.home !== undefined ? { home: cfg.home } : {}),
 				cwd: cfg.cwd,
 			});
-			if (!this.pollValid(epoch) || !run.ok) {
+			if (!this.pollValid(epoch, manual) || !run.ok) {
 				return;
 			}
-			const identity = parseJsonLine<{ name?: unknown; identity_id?: unknown }>(
+			const identity = parseJsonLine<{ name?: unknown; identity_id?: unknown; device_id?: unknown }>(
 				run.stdout,
 				"identity show",
 			);
@@ -670,9 +873,16 @@ export class AmbientController implements AmbientLike {
 			if (!IDENTITY_ID_RE.test(identityId)) {
 				return;
 			}
+			const name = typeof identity.name === "string" ? identity.name : identityId.slice(0, 8);
+			this.identity = {
+				name,
+				identityId,
+				from8: identityId.slice(0, 8),
+				...(typeof identity.device_id === "string" ? { deviceId: identity.device_id } : {}),
+			};
 			this.classifier.setIdentity({
 				identityId,
-				...(typeof identity.name === "string" ? { name: identity.name } : {}),
+				name,
 			});
 		} catch {
 			// silently off (brief §3.3)
@@ -690,6 +900,7 @@ export class AmbientController implements AmbientLike {
 		exec: ExecFn,
 		bin: string,
 		cfg: ResolvedConfig,
+		manual = false,
 	): Promise<{ joined: string[]; removed: string[] }> {
 		const none = { joined: [] as string[], removed: [] as string[] };
 		let parsed: unknown;
@@ -698,7 +909,7 @@ export class AmbientController implements AmbientLike {
 				...(cfg.home !== undefined ? { home: cfg.home } : {}),
 				cwd: cfg.cwd,
 			});
-			if (!this.pollValid(epoch) || !run.ok) {
+			if (!this.pollValid(epoch, manual) || !run.ok) {
 				return none;
 			}
 			parsed = parseJsonLine<unknown>(run.stdout, "room members");
@@ -893,12 +1104,15 @@ export class AmbientController implements AmbientLike {
 		this.ctx = undefined;
 		this.ui = undefined;
 		this.cfg = undefined;
+		this.configError = undefined;
+		this.lastBinary = undefined;
 		this.active = false;
 		// Invalidate any in-flight poll: when it resumes it must find a
 		// mismatched epoch and drop ALL side effects (store seed, failStreak,
 		// toasts, rescheduling) instead of polluting the next session.
 		this.epoch += 1;
 		this.inFlight = false;
+		this.inFlightPromise = undefined;
 		this.failStreak = 0;
 		this.storeInitialized = false;
 		this.needsDeep = true;
@@ -917,9 +1131,12 @@ export class AmbientController implements AmbientLike {
 		this.expectedCloses.clear();
 		this.prevPipeIds = undefined;
 		this.tailLook = undefined;
+		this.currentRows = [];
+		this.identity = undefined;
 		// mentionProviderRegistered stays true (host-side registration is
 		// process-wide); the provider goes inert because active is false.
 		this.lastMentionValues = undefined;
+		this.notifySubscribers();
 	}
 
 	/** UI calls must never take the poll loop down (stale pi throws after replacement). */

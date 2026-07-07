@@ -37,6 +37,7 @@ const PI_TUI_STUB = `
 export const visibleWidth = (text) => [...String(text)].length;
 export function truncateToWidth(text, maxWidth, ellipsis = "...", pad = false) {
 	const chars = [...String(text)];
+	if (maxWidth <= 0) return "";
 	if (chars.length <= maxWidth) {
 		return pad ? String(text) + " ".repeat(maxWidth - chars.length) : String(text);
 	}
@@ -45,6 +46,29 @@ export function truncateToWidth(text, maxWidth, ellipsis = "...", pad = false) {
 }
 export const sliceByColumn = (text, start, end) => [...String(text)].slice(start, end).join("");
 export const wrapTextWithAnsi = (text) => [String(text)];
+export const Key = {
+	escape: "escape",
+	esc: "esc",
+	enter: "enter",
+	return: "return",
+	tab: "tab",
+	up: "up",
+	down: "down",
+	question: "?",
+	shift: (key) => "shift+" + key,
+	ctrlAlt: (key) => "ctrl+alt+" + key,
+};
+export function matchesKey(data, keyId) {
+	if (data === keyId) return true;
+	if ((keyId === "escape" || keyId === "esc") && data === "\\x1b") return true;
+	if (keyId === "enter" && (data === "\\r" || data === "\\n")) return true;
+	if (keyId === "return" && (data === "\\r" || data === "\\n")) return true;
+	if (keyId === "tab" && data === "\\t") return true;
+	if (keyId === "shift+tab" && data === "\\x1b[Z") return true;
+	if (keyId === "up" && data === "\\x1b[A") return true;
+	if (keyId === "down" && data === "\\x1b[B") return true;
+	return false;
+}
 `;
 
 async function transpileFile(inputPath, outputPath) {
@@ -156,11 +180,13 @@ export function stubCtx(overrides = {}) {
 	const widgets = new Map();
 	const statuses = new Map();
 	const autocompleteProviders = [];
+	const customComponents = [];
 	const ui = {
 		notifications,
 		widgets,
 		statuses,
 		autocompleteProviders,
+		customComponents,
 		notify: (message, type = "info") => notifications.push({ message, type }),
 		setWidget: (key, content, options) => {
 			if (content === undefined) widgets.delete(key);
@@ -174,6 +200,23 @@ export function stubCtx(overrides = {}) {
 		select: async () => undefined,
 		confirm: async () => false,
 		input: async () => undefined,
+		custom: (factory, options) => {
+			let settle;
+			const promise = new Promise((resolve) => {
+				settle = resolve;
+			});
+			const tui = {
+				terminal: { columns: 80, rows: 24 },
+				renders: 0,
+				requestRender() { this.renders++; },
+			};
+			const theme = { fg: (_color, text) => text, bold: (text) => text };
+			const done = (result) => settle(result);
+			Promise.resolve(factory(tui, theme, {}, done)).then((component) => {
+				customComponents.push({ component, options, tui, done });
+			});
+			return promise;
+		},
 	};
 	return {
 		cwd: process.cwd(),

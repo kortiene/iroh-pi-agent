@@ -88,6 +88,7 @@ export const COMMAND_NAMES = {
 	roomPreview: "room-preview",
 	roomTail: "room-tail",
 	roomPulse: "room-pulse",
+	roomCockpit: "room-cockpit",
 } as const;
 
 /* ------------------------------------------------------------------ */

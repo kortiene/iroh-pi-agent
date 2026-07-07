@@ -44,6 +44,7 @@ import { STATUS_VOCABULARY, TOOL_NAMES } from "./constants.js";
 import { PipeManager } from "./pipes.js";
 import { redact, redactAndCap } from "./redact.js";
 import type { AmbientLike } from "./tui/ambient.js";
+import type { CockpitControllerLike } from "./tui/cockpit/controller.js";
 import { toolRenderers } from "./tui/wire.js";
 import {
 	clampTailLimit,
@@ -86,6 +87,8 @@ export interface IrohRoomOptions {
 	pipes?: PipeManager;
 	/** Ambient pulse controller (index.ts wires the real one; tests may fake it). */
 	ambient?: AmbientLike;
+	/** Opt-in focused room cockpit controller (index.ts wires the real one; tests may fake it). */
+	cockpit?: CockpitControllerLike;
 }
 
 /** Build the dependency bundle; defaults wire pi.exec, process.env, a fresh PipeManager. */

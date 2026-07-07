@@ -240,6 +240,10 @@ export class TaskTracker {
 	private claimRests: string[] = [];
 	/** agent.status messages with state === "claimed" (id mention-matched). */
 	private claimStatusMessages: string[] = [];
+	/** agent.status messages with state === "ready_for_review" (id mention-matched). */
+	private readyStatusMessages: string[] = [];
+	/** agent.status messages with state === "done" (id mention-matched). */
+	private doneStatusMessages: string[] = [];
 	/**
 	 * Memoized unclaimed() result. The pulse widget reads unclaimedCount() on
 	 * EVERY render frame (per keystroke), while the claimed-set only changes
@@ -292,12 +296,14 @@ export class TaskTracker {
 			}
 			// row.state is the status label; row.status is MEMBERSHIP — never
 			// read row.status here (brief §2.5).
-			if (
-				row.event_type === "agent.status" &&
-				row.state === "claimed" &&
-				typeof row.message === "string"
-			) {
-				this.pushSignal(this.claimStatusMessages, row.message);
+			if (row.event_type === "agent.status" && typeof row.message === "string") {
+				if (row.state === "claimed") {
+					this.pushSignal(this.claimStatusMessages, row.message);
+				} else if (row.state === "ready_for_review") {
+					this.pushSignal(this.readyStatusMessages, row.message);
+				} else if (row.state === "done") {
+					this.pushSignal(this.doneStatusMessages, row.message);
+				}
 			}
 		}
 		return fresh;
@@ -317,7 +323,15 @@ export class TaskTracker {
 		);
 	}
 
-	/** Unclaimed tasks (extracted − claimed), capped; heuristic, always ~-marked.
+	private isReadyForReview(id: string): boolean {
+		return this.readyStatusMessages.some((message) => mentionsId(message, id));
+	}
+
+	private isDone(id: string): boolean {
+		return this.doneStatusMessages.some((message) => mentionsId(message, id));
+	}
+
+	/** Unclaimed tasks (extracted − claimed/ready/done), capped; heuristic, always ~-marked.
 	 * Memoized between ingests (see unclaimedCache) — callers must not mutate. */
 	unclaimed(): DetectedTask[] {
 		if (this.unclaimedCache !== undefined) {
@@ -325,7 +339,7 @@ export class TaskTracker {
 		}
 		const result: DetectedTask[] = [];
 		for (const task of this.tasks.values()) {
-			if (!this.isClaimed(task.id)) {
+			if (!this.isClaimed(task.id) && !this.isReadyForReview(task.id) && !this.isDone(task.id)) {
 				result.push(task);
 				if (result.length >= this.unclaimedCap) {
 					break;
@@ -345,10 +359,31 @@ export class TaskTracker {
 		return [...this.tasks.keys()];
 	}
 
+	/** Every tracked task (read-only cockpit snapshot). */
+	all(): DetectedTask[] {
+		return [...this.tasks.values()];
+	}
+
+	claimed(): DetectedTask[] {
+		return this.all().filter(
+			(task) => this.isClaimed(task.id) && !this.isReadyForReview(task.id) && !this.isDone(task.id),
+		);
+	}
+
+	readyForReview(): DetectedTask[] {
+		return this.all().filter((task) => this.isReadyForReview(task.id) && !this.isDone(task.id));
+	}
+
+	done(): DetectedTask[] {
+		return this.all().filter((task) => this.isDone(task.id));
+	}
+
 	reset(): void {
 		this.tasks = new Map();
 		this.claimRests = [];
 		this.claimStatusMessages = [];
+		this.readyStatusMessages = [];
+		this.doneStatusMessages = [];
 		this.unclaimedCache = undefined;
 	}
 }

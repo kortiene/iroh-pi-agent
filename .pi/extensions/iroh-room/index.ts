@@ -1,7 +1,7 @@
 /**
  * iroh-room Pi extension — entry point.
  *
- * Registers 10 model-facing tools and 7 slash commands that wrap the
+ * Registers 10 model-facing tools and 8 slash commands that wrap the
  * `iroh-rooms` CLI (status, messages, tail snapshots, artifacts, loopback
  * preview pipes), plus the ambient room pulse (widget + footer pill fed by a
  * polling RoomFeedStore, TUI mode only). Everything is registered
@@ -20,6 +20,7 @@ import { TOOL_NAMES } from "./src/constants.js";
 import { PipeManager } from "./src/pipes.js";
 import { registerIrohTools, type IrohRoomOptions } from "./src/tools.js";
 import { AmbientController } from "./src/tui/ambient.js";
+import { CockpitController } from "./src/tui/cockpit/controller.js";
 
 /**
  * Build the extension entry. Exported so tests can inject deps (exec, env,
@@ -37,12 +38,13 @@ export function createIrohRoomExtension(options: IrohRoomOptions = {}): (pi: Ext
 		// so the poll loop shells through the same exec/env as everything else.
 		const ambient =
 			options.ambient ?? new AmbientController({ env: deps.env, exec: deps.exec, pipes });
+		const cockpit = options.cockpit ?? new CockpitController({ dataSource: ambient });
 		// Late-bind the controller into the tool deps (it needs deps.exec/env
 		// to construct, so it cannot exist before registerIrohTools): the
 		// iroh_pipe_close op marks its own close as expected BEFORE touching
 		// the pipe registry, closing the pipe_closed_own race for tool closes.
 		deps.ambient = ambient;
-		registerIrohCommands(pi, { ...wired, ambient });
+		registerIrohCommands(pi, { ...wired, ambient, cockpit });
 		pi.on("session_start", async (event, ctx) => {
 			await ambient.onSessionStart(event, ctx);
 		});
@@ -70,6 +72,7 @@ export function createIrohRoomExtension(options: IrohRoomOptions = {}): (pi: Ext
 		// ambient surfaces/timers down, then drain pipe children. Both are
 		// idempotent.
 		pi.on("session_shutdown", async () => {
+			cockpit.shutdown();
 			ambient.shutdown();
 			await pipes.closeAll();
 		});

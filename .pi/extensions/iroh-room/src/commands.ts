@@ -1,7 +1,7 @@
 /**
  * Slash commands (SPEC §8.3/§8.4, DESIGN §5):
  * /room, /room-status, /room-send, /room-artifact, /room-preview, /room-tail,
- * /room-pulse.
+ * /room-pulse, /room-cockpit.
  *
  * Handlers parse the raw args string, run the SAME core ops as the tools
  * (validation, config resolution, CLI path), and report through
@@ -46,6 +46,7 @@ import {
 	type ToolDeps,
 } from "./tools.js";
 import { registerCardRenderers } from "./tui/wire.js";
+import { COCKPIT_TABS, type CockpitTab } from "./tui/cockpit/model.js";
 
 function say(ctx: ExtensionContext, text: string, type: "info" | "warning" | "error" = "info"): void {
 	if (ctx.hasUI) {
@@ -76,7 +77,7 @@ function isTui(ctx: ExtensionContext): boolean {
  */
 const MEMBER_PICK_TIMEOUT_MS = 60_000;
 
-/** Register all 7 slash commands. Must run synchronously in the factory body. */
+/** Register all 8 slash commands. Must run synchronously in the factory body. */
 export function registerIrohCommands(pi: ExtensionAPI, options: IrohRoomOptions = {}): ToolDeps {
 	const deps = makeDeps(pi, options);
 	registerCardRenderers(pi);
@@ -98,6 +99,7 @@ export function registerIrohCommands(pi: ExtensionAPI, options: IrohRoomOptions 
 	};
 
 	const ambient = options.ambient;
+	const cockpit = options.cockpit;
 	/**
 	 * Every /room* handler boosts the ambient poll after running (recent
 	 * interaction ≈ attention, brief §4 M1). No-op when no controller is wired.
@@ -649,6 +651,67 @@ export function registerIrohCommands(pi: ExtensionAPI, options: IrohRoomOptions 
 			return items.length > 0 ? items : null;
 		},
 		handler: pulseHandler,
+	});
+
+	const cockpitUsage =
+		"usage: /room-cockpit [open|close|refresh|tab overview|tab timeline|tab tasks|tab health]";
+	const isCockpitTab = (value: string | undefined): value is CockpitTab =>
+		value !== undefined && (COCKPIT_TABS as readonly string[]).includes(value);
+
+	pi.registerCommand(COMMAND_NAMES.roomCockpit, {
+		description: "Open the read-only iroh-room cockpit (TUI mode only)",
+		getArgumentCompletions: (prefix) => {
+			const values = ["open", "close", "refresh", "tab", ...COCKPIT_TABS];
+			const items = values.filter((value) => value.startsWith(prefix)).map((value) => ({ value, label: value }));
+			return items.length > 0 ? items : null;
+		},
+		handler: async (args, ctx) => {
+			const tokens = tokenize(args.trim());
+			const subcommand = tokens[0] ?? "open";
+			if (!isTui(ctx)) {
+				if (ctx.mode === "rpc" && ctx.hasUI) {
+					say(ctx, "/room-cockpit is only available in TUI mode", "warning");
+				}
+				return; // json/print: no custom UI and no ambient side effects
+			}
+			if (cockpit === undefined) {
+				say(ctx, "room cockpit is unavailable (no cockpit controller wired)", "warning");
+				return;
+			}
+			if (subcommand === "open") {
+				ambient?.boost();
+				await cockpit.open("full", ctx);
+				return;
+			}
+			if (subcommand === "close") {
+				cockpit.close("user");
+				ambient?.boost();
+				say(ctx, "room cockpit closed");
+				return;
+			}
+			if (subcommand === "refresh") {
+				ambient?.boost();
+				await ambient?.requestRefresh();
+				say(ctx, "room cockpit refresh requested");
+				return;
+			}
+			if (subcommand === "tab") {
+				const tab = tokens[1];
+				if (!isCockpitTab(tab)) {
+					say(ctx, cockpitUsage, "error");
+					return;
+				}
+				cockpit.selectTab?.(tab);
+				ambient?.boost();
+				return;
+			}
+			if (isCockpitTab(subcommand)) {
+				cockpit.selectTab?.(subcommand);
+				ambient?.boost();
+				return;
+			}
+			say(ctx, cockpitUsage, "error");
+		},
 	});
 
 	pi.registerShortcut("ctrl+alt+r", {

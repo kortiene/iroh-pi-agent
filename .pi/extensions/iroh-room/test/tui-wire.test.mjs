@@ -145,7 +145,7 @@ test("registered tool renderResult renders the live envelope from execute()", as
 
 /* --------------------------- commands: tui cards ---------------------------- */
 
-test("registerIrohCommands registers the card renderer for both custom types and still exactly 7 commands", () => {
+test("registerIrohCommands registers the card renderer for both custom types and still exactly 8 commands", () => {
 	const pi = stubPi();
 	registerIrohCommands(pi, { env: baseEnv, exec: stubExec([]).exec });
 	assert.deepEqual(
