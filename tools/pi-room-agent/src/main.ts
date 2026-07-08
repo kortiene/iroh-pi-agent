@@ -460,6 +460,44 @@ function detectTasks(rows: readonly TailRow[]): RoomTask[] {
   return tasks;
 }
 
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function rowMentionsTask(row: TailRow, taskId: string): boolean {
+  const pattern = new RegExp(`(^|[^A-Za-z0-9_.-])${escapeRegExp(taskId)}([^A-Za-z0-9_.-]|$)`);
+  for (const key of ['body', 'message', 'summary']) {
+    const value = row[key];
+    if (typeof value === 'string' && pattern.test(value)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function isPriorTaskActivity(row: TailRow, taskId: string): boolean {
+  if (row.event_type === 'message.text') {
+    const body = row['body'];
+    if (typeof body !== 'string') return false;
+    return (
+      new RegExp(`\\bClaiming task\\s+${escapeRegExp(taskId)}\\b`).test(body) ||
+      new RegExp(`\\bTask\\s+${escapeRegExp(taskId)}\\s+is\\s+(?:ready|not ready)\\s+for review\\b`).test(body)
+    );
+  }
+  if (row.event_type !== 'agent.status') {
+    return false;
+  }
+  const state = typeof row['state'] === 'string' ? row['state'] : undefined;
+  if (!['claimed', 'planning', 'implementing', 'testing', 'blocked', 'ready_for_review', 'done', 'failed', 'cancelled'].includes(state ?? '')) {
+    return false;
+  }
+  return rowMentionsTask(row, taskId);
+}
+
+function hasPriorTaskActivity(task: RoomTask, rows: readonly TailRow[]): boolean {
+  return rows.some((row) => isPriorTaskActivity(row, task.id));
+}
+
 /**
  * One poll-diff iteration: offline tail read, diff on event_id, act on new
  * rows. Returns false on a tail failure so callers can decide to abort/retry.
@@ -501,9 +539,10 @@ export async function pollOnce(ctx: WorkerContext, actOnNewRows: boolean): Promi
   }
   note(`detected ${tasks.length} room-task block(s)`);
   for (const task of tasks) {
-    // TODO: claim-conflict resolution — scan the tail for an
-    // existing claim of task.id by another agent before claiming (out of
-    // scope for MVP per SPEC.md §20 / docs/pi-harness.md Out of scope).
+    if (hasPriorTaskActivity(task, rows)) {
+      note(`skipping task ${truncateBytes(task.id, 256)}: existing claim/status/handoff found in room tail`);
+      continue;
+    }
     try {
       await claimAndDrive(ctx, task);
     } catch (error) {

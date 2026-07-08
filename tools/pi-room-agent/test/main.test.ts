@@ -33,6 +33,10 @@ function taskRow(eventId: string, body: string): Record<string, unknown> {
   return { event_id: eventId, event_type: 'message.text', body, format: 'plain' };
 }
 
+function statusRow(eventId: string, state: string, message: string): Record<string, unknown> {
+  return { event_id: eventId, event_type: 'agent.status', state, message };
+}
+
 function taskBlock(id: string, title = 'a task'): string {
   return `\`\`\`room-task\nid: ${id}\ntype: implement\ntitle: ${title}\n\`\`\``;
 }
@@ -216,6 +220,40 @@ describe('pollOnce decision tree', () => {
     expect(await pollOnce(ctx, true)).toBe(true);
     const writesAfterSecond = runner.kinds().filter((k) => k !== 'tail').length;
     expect(writesAfterSecond).toBe(writesAfterFirst); // second poll: tail only
+  });
+
+  it('skips historical tasks that already have a claim/status in the same tail window', async () => {
+    const runner = makeRunner([{
+      ...OK,
+      stdout: tailStdout([
+        taskRow(EVENT_A, taskBlock('IR-PI-OLD')),
+        taskRow(EVENT_B, 'Claiming task IR-PI-OLD as pi-agent. I will post progress through agent.status and share artifacts when ready.'),
+        statusRow(`blake3:${'c3'.repeat(32)}`, 'failed', 'claimed IR-PI-OLD: a task'),
+      ]),
+    }]);
+    const ctx = makeCtx(runner);
+
+    expect(await pollOnce(ctx, true)).toBe(true);
+
+    expect(runner.kinds()).toEqual(['tail']);
+  });
+
+  it('with --once-style backlog, skips old claimed tasks but claims a new unclaimed task', async () => {
+    const runner = makeRunner([{
+      ...OK,
+      stdout: tailStdout([
+        taskRow(EVENT_A, taskBlock('IR-PI-OLD')),
+        taskRow(EVENT_B, 'Claiming task IR-PI-OLD as pi-agent. I will post progress through agent.status and share artifacts when ready.'),
+        taskRow(`blake3:${'c4'.repeat(32)}`, taskBlock('IR-PI-NEW')),
+      ]),
+    }]);
+    const ctx = makeCtx(runner);
+
+    expect(await pollOnce(ctx, true)).toBe(true);
+
+    const sends = runner.calls.filter((args) => kindOf(args) === 'send');
+    expect(sends.some((args) => args.some((arg) => arg.includes('IR-PI-OLD')))).toBe(false);
+    expect(sends.some((args) => args.some((arg) => arg.includes('IR-PI-NEW')))).toBe(true);
   });
 
   it('returns false on a tail failure and performs no writes', async () => {
