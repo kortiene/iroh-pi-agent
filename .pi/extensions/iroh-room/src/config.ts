@@ -1,5 +1,5 @@
 /**
- * Configuration loading + resolution (SPEC §9, DESIGN §2).
+ * Configuration loading + resolution (SPEC.md §9).
  *
  * Resolution order per value: explicit argument > environment variable >
  * .iroh-room-pi.json (in cwd) > safe default. Everything fails closed with a

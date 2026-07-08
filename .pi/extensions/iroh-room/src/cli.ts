@@ -1,5 +1,5 @@
 /**
- * iroh-rooms CLI integration (DESIGN §4):
+ * iroh-rooms CLI integration (SPEC.md §8/§10):
  * - pure argv builders (no shell, ever),
  * - pure stdout/stderr parsers pinned to the CLI's labeled `key: value`
  *   formats and single-line JSON outputs (see research-cli §3),
@@ -258,7 +258,7 @@ function shortId(value: unknown): string {
 	return s === undefined ? "?" : s.slice(0, 8);
 }
 
-/** One human line per event row (per-type rules from DESIGN §5). */
+/** One human line per event row (per-type rules from docs/pi-harness.md). */
 export function summarizeTailRow(row: TailRow): string {
 	const type = row.event_type ?? "unknown";
 	switch (type) {

@@ -1,7 +1,7 @@
 /**
  * Secret redaction for CLI stdout/stderr before it reaches the model or UI.
  *
- * Conservative, pattern-based (SPEC §16.2, DESIGN §9). Every match is replaced
+ * Conservative, pattern-based (SPEC.md §16.2). Every match is replaced
  * with "[REDACTED]" (key names of key=value pairs are kept).
  *
  * Deliberately NOT redacted (the protocol's public currency):

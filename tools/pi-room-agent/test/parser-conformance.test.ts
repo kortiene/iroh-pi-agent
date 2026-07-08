@@ -1,5 +1,5 @@
 /**
- * Grammar-parity conformance suite (DESIGN.md §6/§7): the worker's canonical
+ * Grammar-parity conformance suite (SPEC.md §11 / docs/pi-harness.md §Room-task format): the worker's canonical
  * task parser and the standalone skill script MUST implement the same
  * grammar. Every fixture below is fed to both:
  *

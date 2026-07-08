@@ -2,10 +2,10 @@
  * iroh-rooms CLI integration: argv builders, stdout/stderr parsers, secret
  * redaction, and a thin synchronous runner.
  *
- * Builders and parsers are PURE and mirror DESIGN.md §4 exactly; the argv
+ * Builders and parsers are PURE and mirror the CLI contract in SPEC.md §8/§10; the argv
  * shapes and stdout formats were confirmed against the iroh-rooms sources
  * (research-cli.md §2–§6). Builders validate their inputs against the
- * protocol limits (DESIGN.md §3) and throw CliValidationError — fail closed,
+ * protocol limits documented in SPEC.md §10 and throw CliValidationError — fail closed,
  * never emit a partially-valid command.
  *
  * The runner (runIrohRooms) is a spawnSync wrapper returning the house
@@ -38,7 +38,7 @@ export class CliValidationError extends Error {
   }
 }
 
-// --- validation limits (mirror iroh-rooms-core; DESIGN.md §3) -----------------
+// --- validation limits (mirror iroh-rooms-core; SPEC.md §10) ------------------
 
 export const MAX_STATUS_LABEL_BYTES = 64;
 export const MAX_STATUS_MESSAGE_BYTES = 4096;
@@ -79,7 +79,7 @@ function base(ctx: CliContext): string[] {
   return [`--data-dir=${ctx.dataDir}`];
 }
 
-// --- argv builders (DESIGN.md §4; argv only, no shell, binary not included) ---
+// --- argv builders (SPEC.md §8/§10; argv only, no shell, binary not included) ---
 //
 // Hardened argv convention (verified against iroh-rooms 0.1.0, see
 // review-tmp/argv-check-worker): every option uses the equals form
@@ -371,11 +371,11 @@ export function parseIdentityShow(stdout: string): IdentityInfo | undefined {
   return info;
 }
 
-// --- secret redaction (DESIGN.md §9; same pattern set as the extension) -------
+// --- secret redaction (SPEC.md §16.2; same pattern set as the extension) ------
 
 /**
  * Conservative secret patterns replaced with [REDACTED]. The pattern set is
- * ported EXACTLY from the extension's redact.ts (DESIGN.md §9: same set in
+ * ported EXACTLY from the extension's redact.ts (SPEC.md §16.2: same set in
  * both components). Deliberately does NOT touch the protocol's public
  * currency: bare 64-hex identity ids, blake3: ids, file_<32-hex> ids, 32-hex
  * pipe ids, and roomtkt1 tickets.

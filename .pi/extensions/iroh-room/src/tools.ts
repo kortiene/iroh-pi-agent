@@ -1,5 +1,5 @@
 /**
- * Model-facing tools (SPEC §10, DESIGN §5).
+ * Model-facing tools (SPEC.md §10).
  *
  * Envelope contract (uniform across tools):
  * - success:      { ok: true, event_id?/file_id?/pipe_id?, …parsed fields, stdout, stderr? }

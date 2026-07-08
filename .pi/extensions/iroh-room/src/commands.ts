@@ -1,5 +1,5 @@
 /**
- * Slash commands (SPEC §8.3/§8.4, DESIGN §5):
+ * Slash commands (SPEC.md §8.3/§8.4 and docs/pi-harness.md command reference):
  * /room, /room-status, /room-send, /room-artifact, /room-preview, /room-tail,
  * /room-pulse, /room-cockpit.
  *

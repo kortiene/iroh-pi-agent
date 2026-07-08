@@ -1,6 +1,6 @@
 /**
  * Pure mapping from Pi RPC lifecycle events to iroh-room agent.status
- * transitions (DESIGN.md §7).
+ * transitions (docs/pi-harness.md §Headless worker).
  *
  * Mapping contract:
  *   - agent_start                                  -> planning (per-run state resets)

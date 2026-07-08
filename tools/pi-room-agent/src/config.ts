@@ -2,7 +2,7 @@
  * Worker configuration loading and resolution.
  *
  * Same semantics as the Pi extension's config module (independent copy,
- * worker flavor), per DESIGN.md §2:
+ * worker flavor), per SPEC.md §9:
  *
  *   resolution order per value:
  *     explicit argument > environment variable > .iroh-room-pi.json (cwd) > safe default

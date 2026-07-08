@@ -1,8 +1,12 @@
 # Room Cockpit — implementation brief
 
-**Status: PROPOSED / NOT IMPLEMENTED.** This brief is the next-step design
-artifact for a full opt-in iroh-room cockpit/dashboard inside Pi's interactive
-TUI. It complements the already implemented [Room Pulse](pi-harness.md#room-pulse-tui)
+**Status: PARTIALLY EXECUTED.** Phases 1–3 are implemented and locally tested:
+the read-only full-screen cockpit, right-side overlay mode, and richer
+read-only tabs (Members, Artifacts, Pipes, Settings) now exist. Phase 4
+confirmed mutations are deliberately not implemented; Phase 5 polish is
+partial. This brief remains the design record and next-step roadmap for the
+full opt-in iroh-room cockpit/dashboard inside Pi's interactive TUI. It
+complements the already implemented [Room Pulse](pi-harness.md#room-pulse-tui)
 ambient layer; it does not replace it.
 
 Where this brief and `docs/tui-cockpit-proposal.md` disagree, this brief wins.
@@ -779,7 +783,7 @@ Non-negotiable:
 
 ## 13. Implementation phases
 
-### Phase 0 — this brief
+### Phase 0 — this brief — DONE
 
 Deliver:
 
@@ -789,7 +793,7 @@ docs/tui-cockpit-brief.md
 
 No code.
 
-### Phase 1 — read-only full-screen cockpit
+### Phase 1 — read-only full-screen cockpit — DONE
 
 Add:
 
@@ -818,7 +822,16 @@ Acceptance:
 - command count tests updated intentionally (`COMMAND_NAMES` grows from 7 to 8,
   and tests that pin "7 commands" are updated in the same change).
 
-### Phase 2 — overlay mode
+Implementation evidence:
+
+- `/room-cockpit` is registered in `.pi/extensions/iroh-room/src/commands.ts`.
+- The custom component lives under `.pi/extensions/iroh-room/src/tui/cockpit/`.
+- The cockpit consumes `AmbientController` snapshots instead of starting an
+  independent room-tail loop.
+- Tests cover lifecycle, rendering, hostile input, bridge behavior, and command
+  registration.
+
+### Phase 2 — overlay mode — DONE
 
 Add:
 
@@ -834,7 +847,13 @@ Acceptance:
 - overlay handle is cleaned up on close/shutdown;
 - reopening does not reuse stale component references.
 
-### Phase 3 — richer read-only tabs
+Implementation evidence:
+
+- `CockpitController.open("overlay", …)` uses Pi TUI overlay options with a
+  right-side anchor, minimum width guard, focus, and cleanup.
+- Overlay lifecycle is covered by `.pi/extensions/iroh-room/test/tui-cockpit-overlay.test.mjs`.
+
+### Phase 3 — richer read-only tabs — DONE
 
 Add:
 
@@ -851,7 +870,15 @@ Acceptance:
 - artifact ids are mapped correctly;
 - labels are sanitized.
 
-### Phase 4 — confirmed actions
+Implementation evidence:
+
+- `COCKPIT_TABS` includes `overview`, `timeline`, `tasks`, `members`,
+  `artifacts`, `pipes`, `health`, and `settings`.
+- Dedicated renderers exist for Members, Artifacts, Pipes, and Settings.
+- Read-only action keys currently surface a notice instead of mutating room
+  state.
+
+### Phase 4 — confirmed actions — NOT IMPLEMENTED
 
 Add confirmed actions for:
 
@@ -871,7 +898,7 @@ Acceptance:
 - validators run before CLI;
 - tests prove no partial sends.
 
-### Phase 5 — polish
+### Phase 5 — polish — PARTIAL
 
 Add:
 
@@ -881,6 +908,23 @@ Add:
 - diagnostics export;
 - visual golden tests at several widths;
 - compact/wide layout modes.
+
+Implemented polish so far:
+
+- help screen;
+- keyboard navigation;
+- manual refresh;
+- deterministic selection clamping;
+- hostile-input tests;
+- multiple width-focused render tests.
+
+Still open:
+
+- persistent selected tab;
+- search state;
+- diagnostics export;
+- broader visual golden coverage;
+- explicit compact/wide layout modes.
 
 ---
 

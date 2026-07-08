@@ -4,7 +4,7 @@
  * ready_for_review status (compiles; validation is real, the CLI round-trip
  * is NOT yet exercised end-to-end).
  *
- * Fail-closed path validation (DESIGN.md §3):
+ * Fail-closed path validation (SPEC.md §10 / §16):
  *   - path must exist and be a regular file
  *   - size <= 104_857_600 bytes (100 MiB, the protocol share cap) — checked
  *     locally first for a clear error before invoking the CLI

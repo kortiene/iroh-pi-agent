@@ -1,5 +1,5 @@
 /**
- * Input validation for every iroh-room tool/command (SPEC §10, DESIGN §3).
+ * Input validation for every iroh-room tool/command (SPEC.md §10).
  *
  * All limits are BYTE limits (Buffer.byteLength), mirroring
  * iroh-rooms-core/src/event/constants.rs. Every validator either returns the
