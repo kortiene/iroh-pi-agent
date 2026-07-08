@@ -68,6 +68,21 @@ preview support remain before production readiness.
 Quality gates: CI runs `npm ci`, `npm run typecheck`, and `npm test` for both
 `.pi/extensions/iroh-room` and `tools/pi-room-agent`.
 
+Local release checkpoint:
+
+```bash
+tools/release-check.sh
+```
+
+This runs extension + worker typecheck/tests and, when `.iroh-room-pi.json` or
+the `IROH_ROOM_ID` / `IROH_ROOMS_HOME` / `IROH_ROOMS_BIN` environment variables
+are available, the headless worker smoke dry-run preflight. A full mutating
+headless smoke is opt-in only:
+
+```bash
+tools/release-check.sh --smoke-full
+```
+
 Not implemented (by design, for now): `iroh_file_fetch`, live tail streaming,
 real Pi RPC integration coverage, task scheduling, budget enforcement,
 sandboxing, SDK-native integration, and multi-agent coordination.
