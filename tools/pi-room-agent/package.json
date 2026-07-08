@@ -10,7 +10,8 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "start": "tsx src/main.ts"
+    "start": "tsx src/main.ts",
+    "smoke:headless": "node scripts/smoke-headless-worker.mjs"
   },
   "devDependencies": {
     "@types/node": "^22",

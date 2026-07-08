@@ -36,6 +36,18 @@ npm start -- --once
 
 # continuous poll loop:
 npm start -- --poll-interval 5
+
+# local-only smoke helper (safe default: dry-run preflight, no mutation):
+npm run smoke:headless -- --room blake3:<64-hex> \
+  --data-dir ~/.iroh-pi-agent \
+  --bin /absolute/path/to/iroh-rooms
+
+# full local smoke: posts a new smoke task, runs the worker, and expects a
+# ready_for_review handoff with a shared file artifact:
+npm run smoke:headless -- --room blake3:<64-hex> \
+  --data-dir ~/.iroh-pi-agent \
+  --bin /absolute/path/to/iroh-rooms \
+  --post-task --run-worker
 ```
 
 Flags: `--room <blake3:64-hex>`, `--data-dir <path>`, `--once`, `--dry-run`,
