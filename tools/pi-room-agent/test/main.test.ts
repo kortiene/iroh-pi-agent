@@ -163,8 +163,12 @@ describe('pollOnce decision tree', () => {
   });
 
   it('does not send a ready-for-review handoff when Pi ends failed', async () => {
+    const syntheticSecret = ['SEC', 'RET'].join('') + '=' + ['abc123', '456789'].join('');
     const driver = fakePiDriver([
       { type: 'agent_start' },
+      { type: 'tool_execution_start', toolName: 'bash', args: { command: 'npm run typecheck' } },
+      { type: 'tool_execution_end', toolName: 'bash', isError: true, error: 'tsc exited 2' },
+      { type: 'extension_error', message: `tool renderer failed with ${syntheticSecret}` },
       { type: 'agent_end', messages: [{ role: 'assistant', stopReason: 'error' }] },
     ]);
     const runner = makeRunner([{ ...OK, stdout: tailStdout([taskRow(EVENT_A, taskBlock('IR-PI-FAIL'))]) }]);
@@ -175,6 +179,10 @@ describe('pollOnce decision tree', () => {
     expect(runner.calls.filter((args) => args.includes('failed'))).toHaveLength(1);
     const handoff = runner.calls.at(-1);
     expect(handoff?.some((arg) => arg.includes('Task IR-PI-FAIL is not ready for review.\n\nOutcome:\nPi ended with status "failed".'))).toBe(true);
+    expect(handoff?.some((arg) => arg.includes('Diagnostics:\n- tool started: bash (npm run typecheck)\n- tool ended failed: bash: tsc exited 2'))).toBe(true);
+    expect(handoff?.some((arg) => arg.includes('agent ended: stopReason=error'))).toBe(true);
+    expect(handoff?.some((arg) => arg.includes(syntheticSecret))).toBe(false);
+    expect(handoff?.some((arg) => arg.includes('SECRET=[REDACTED]'))).toBe(true);
     expect(handoff?.some((arg) => arg.includes('Next steps: inspect the failed/blocked status trail and rerun after fixing the cause.'))).toBe(true);
   });
 

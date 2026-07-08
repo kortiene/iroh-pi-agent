@@ -303,6 +303,75 @@ function postStatus(
   return true;
 }
 
+function eventString(event: PiEventLike, keys: readonly string[]): string | undefined {
+  for (const key of keys) {
+    const value = event[key];
+    if (typeof value === 'string' && value.trim() !== '') {
+      return value.trim();
+    }
+  }
+  return undefined;
+}
+
+function eventBool(event: PiEventLike, key: string): boolean | undefined {
+  return typeof event[key] === 'boolean' ? event[key] : undefined;
+}
+
+function toolCommand(event: PiEventLike): string | undefined {
+  const args = event.args;
+  if (args !== undefined) {
+    const command = args['command'];
+    if (typeof command === 'string' && command.trim() !== '') {
+      return command.trim();
+    }
+  }
+  return undefined;
+}
+
+function assistantStopReason(event: PiEventLike): string | undefined {
+  const messages = Array.isArray(event.messages) ? event.messages : [];
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i];
+    if (typeof message !== 'object' || message === null) continue;
+    const record = message as Record<string, unknown>;
+    if (record['role'] !== 'assistant') continue;
+    const stopReason = record['stopReason'];
+    return typeof stopReason === 'string' ? stopReason : undefined;
+  }
+  return undefined;
+}
+
+function diagnosticLine(event: PiEventLike): string | undefined {
+  switch (event.type) {
+    case 'tool_execution_start': {
+      const tool = typeof event.toolName === 'string' ? event.toolName : 'tool';
+      const command = toolCommand(event);
+      return command === undefined ? `tool started: ${tool}` : `tool started: ${tool} (${command.slice(0, 160)})`;
+    }
+    case 'tool_execution_end': {
+      const tool = typeof event.toolName === 'string' ? event.toolName : 'tool';
+      const failed = eventBool(event, 'isError') === true ? ' failed' : '';
+      const detail = eventString(event, ['error', 'message']);
+      return detail === undefined ? `tool ended${failed}: ${tool}` : `tool ended${failed}: ${tool}: ${detail.slice(0, 160)}`;
+    }
+    case 'extension_error':
+      return `extension error: ${(eventString(event, ['message', 'error', 'detail']) ?? 'unknown').slice(0, 180)}`;
+    case 'agent_end': {
+      const stopReason = assistantStopReason(event) ?? eventString(event, ['stopReason', 'reason']);
+      return stopReason === undefined ? 'agent ended' : `agent ended: stopReason=${stopReason}`;
+    }
+    default:
+      return undefined;
+  }
+}
+
+function diagnosticsBlock(lines: readonly string[]): string[] {
+  if (lines.length === 0) {
+    return ['Diagnostics:', '- No diagnostic Pi events were captured before agent_end.'];
+  }
+  return ['Diagnostics:', ...lines.slice(-8).map((line) => `- ${truncateBytes(redact(line), 400)}`)];
+}
+
 /**
  * Drive the claimed task through Pi RPC and mirror lifecycle transitions into
  * agent.status. Artifact publication is still the next slice; for now the
@@ -315,7 +384,12 @@ export async function driveTaskWithPi(ctx: WorkerContext, task: RoomTask): Promi
     await driver.start();
     await driver.sendPrompt(taskPrompt(task));
     let state = INITIAL_MAPPER_STATE;
+    const diagnostics: string[] = [];
     for await (const event of driver.events()) {
+      const line = diagnosticLine(event);
+      if (line !== undefined) {
+        diagnostics.push(line);
+      }
       const mapped = mapPiEventToStatus(state, event);
       state = mapped.state;
       if (mapped.transition !== null) {
@@ -337,6 +411,7 @@ export async function driveTaskWithPi(ctx: WorkerContext, task: RoomTask): Promi
       'Summary:',
       summary.trim() === '' ? '(Pi completed without a final assistant summary.)' : summary.trim(),
       '',
+      ...(reviewable ? [] : [...diagnosticsBlock(diagnostics), '']),
       'Artifacts: none published by the worker yet.',
       reviewable
         ? 'Next steps: review the room status trail and repository diff.'
