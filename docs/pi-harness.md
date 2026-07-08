@@ -544,10 +544,17 @@ message.text   final handoff
 ```
 
 If Pi ends `failed` or `blocked`, the final handoff must say the task is **not**
-ready for review. A real smoke on 2026-07-08 verified claim + planning + failed
-status + handoff, and caught a bug where failed runs still emitted a
-ready-for-review handoff; the worker now gates the handoff text on the final
-mapped status.
+ready for review. Real smoke results on 2026-07-08:
+
+- `IR-PI-SMOKE-20260708121803` verified claim + planning + failed status +
+  handoff, and caught a bug where failed runs still emitted a ready-for-review
+  handoff; the worker now gates handoff text on the final mapped status.
+- `IR-PI-SMOKE-20260708123521` verified the success path: the worker skipped
+  the previously claimed smoke task, claimed the new task, mirrored
+  `claimed → planning → implementing → ready_for_review`, sent the success
+  handoff, stopped the Pi driver cleanly, created
+  `artifacts/worker-smoke/IR-PI-SMOKE-20260708123521.md`, and left the git
+  working tree clean.
 
 ## Security notes
 
