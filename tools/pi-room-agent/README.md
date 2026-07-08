@@ -78,17 +78,14 @@ config file, or invalid inputs produce clear errors and nothing is sent.
 
 ## Next steps (in order)
 
-1. Add integration coverage against a real `pi --mode rpc` child and a real
-   `iroh-rooms` room; the Pi drive is wired and unit-tested, but not yet
-   exercised end-to-end.
-2. Publish artifacts on `agent_end` via `artifact-publisher.ts` and post
-   `ready_for_review` with the collected `file_…` ids + the SPEC §11.3
-   handoff message.
-3. Claim-conflict resolution: scan the tail for existing claims of a task id
-   before claiming (currently a TODO; out of MVP scope per SPEC.md §20 / docs/pi-harness.md).
-4. Preview pipe integration from the worker (`preview_available` status and
+1. Turn the manual smoke tests in `docs/pi-harness.md` into automated
+   integration coverage against a real `pi --mode rpc` child and a real
+   `iroh-rooms` room.
+2. Improve artifact discovery beyond the current task-id-in-path convention
+   (for example, an optional manifest under `artifacts/worker/<task-id>/`).
+3. Preview pipe integration from the worker (`preview_available` status and
    lifecycle handling).
-5. Longer term: replace the RPC subprocess with the Pi SDK
+4. Longer term: replace the RPC subprocess with the Pi SDK
    (`createAgentSession`) for typed, in-process control (SPEC §15.3).
 
 Out of scope for MVP (SPEC.md §20 / docs/pi-harness.md): new protocol events, `iroh_file_fetch`,

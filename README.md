@@ -59,10 +59,11 @@ prompt templates, and Room Pulse TUI are functional and locally tested. Room
 Cockpit is implemented through its read-only phases: full-screen mode, overlay
 mode, and the richer Members / Artifacts / Pipes / Settings tabs. Confirmed
 Cockpit mutations are not implemented yet. The headless worker has real config,
-task parsing, status mapping, room-tail polling, claim plumbing, and an
-injectable Pi RPC drive that is unit-tested. It still needs real Pi/iroh-room
-integration coverage plus artifact publication before it should be treated as
-production-ready.
+task parsing, status mapping, room-tail polling, claim plumbing, an
+injectable Pi RPC drive, claim-conflict skipping, and task-named artifact
+publication. Real Pi/iroh-room smoke tests have verified failed and successful
+paths, including file sharing; broader automated integration coverage and worker
+preview support remain before production readiness.
 
 Quality gates: CI runs `npm ci`, `npm run typecheck`, and `npm test` for both
 `.pi/extensions/iroh-room` and `tools/pi-room-agent`.

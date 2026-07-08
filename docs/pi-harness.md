@@ -451,12 +451,13 @@ mode (`pi --mode rpc`, JSONL over stdin/stdout) → map Pi lifecycle events to
 `implementing`, test-ish bash → `testing`, `agent_end` → `ready_for_review` or
 `failed`) → share artifacts → optionally expose a preview pipe.
 
-Current status: **unit-tested worker, integration pending**. Config loading,
-the task parser, the status mapper, CLI arg-builders/parsers, poll-diff
-claiming, the injectable Pi RPC drive, lifecycle status mirroring, and final
-handoff messaging are implemented and unit-tested. The Pi RPC client, artifact
-publisher, and preview pipe modules compile, but still need real end-to-end
-coverage; artifact publication and worker preview integration remain next
+Current status: **unit-tested worker, smoke-tested against a real room**.
+Config loading, the task parser, the status mapper, CLI arg-builders/parsers,
+poll-diff claiming, claim-conflict skipping, the injectable Pi RPC drive,
+lifecycle status mirroring, task-named artifact publication, and final handoff
+messaging are implemented and unit-tested. Real smoke tests have verified both
+failed and successful Pi RPC paths, including file sharing into the room.
+Preview pipe integration and broader automated integration coverage remain next
 steps. Try it with:
 
 ```bash
@@ -555,6 +556,12 @@ ready for review. Real smoke results on 2026-07-08:
   handoff, stopped the Pi driver cleanly, created
   `artifacts/worker-smoke/IR-PI-SMOKE-20260708123521.md`, and left the git
   working tree clean.
+- `IR-PI-SMOKE-20260708130107` verified automatic artifact publication: the
+  worker skipped prior smoke tasks, claimed the new task, mirrored
+  `claimed → planning → implementing → ready_for_review → sharing_artifacts → ready_for_review`,
+  shared `artifacts/worker-smoke/IR-PI-SMOKE-20260708130107.md` as
+  `file_ae145c749c651419d565471ba2df1b44`, sent a handoff listing that file
+  id, stopped the Pi driver cleanly, and left the git working tree clean.
 
 ## Security notes
 
