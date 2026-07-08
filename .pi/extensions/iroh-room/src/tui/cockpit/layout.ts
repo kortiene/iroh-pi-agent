@@ -10,6 +10,28 @@ export interface RenderKit {
 	now: number;
 }
 
+/** Theme roles for the cockpit frame — a single subtle chrome color + accented title. */
+export const CHROME_COLOR = "border";
+export const SECTION_BAR = "▌";
+
+const ANSI_RE = /\x1b\[[0-?]*[ -/]*[@-~]/g;
+
+/** Apply a styler when present; identity (raw) otherwise. Keeps plain-mode output byte-identical. */
+function paint(styler: Styler | undefined, color: string, text: string): string {
+	return styler === undefined ? text : styler(color, text);
+}
+
+/** Approximate visible width for already-fitted cells that may now carry ANSI from the theme. */
+function visibleCells(text: string): number {
+	return [...text.replace(ANSI_RE, "")].length;
+}
+
+function padStyledCell(text: string, width: number): string {
+	const w = Math.max(0, width);
+	const visible = visibleCells(text);
+	return visible >= w ? text : `${text}${" ".repeat(w - visible)}`;
+}
+
 export function safeWidth(width: number): number {
 	return Number.isFinite(width) ? Math.max(1, Math.floor(width)) : 80;
 }
@@ -24,42 +46,70 @@ export function padCell(text: string, width: number, fit: FitFn): string {
 	return fitted.length >= w ? fitted : `${fitted}${" ".repeat(w - fitted.length)}`;
 }
 
-export function borderTop(title: string, right: string, width: number, fit: FitFn): string {
+export function borderTop(
+	title: string,
+	right: string,
+	width: number,
+	fit: FitFn,
+	styler?: Styler,
+): string {
 	const w = safeWidth(width);
-	if (w === 1) return fit("╭", w);
+	if (w === 1) return paint(styler, CHROME_COLOR, "╭");
 	const left = `╭─ ${title} `;
 	const r = right === "" ? "" : ` ${right} ─╮`;
 	const available = Math.max(0, w - left.length - r.length);
-	if (available === 0) return fit(`${left}${r}`, w);
-	return fit(`${left}${"─".repeat(available)}${r}`, w);
+	if (available === 0) return paint(styler, CHROME_COLOR, fit(`${left}${r}`, w));
+	// Style-last: plain composition sets the width; color is applied per segment
+	// so the accented title + muted room label read against the subtle frame.
+	const run = "─".repeat(available);
+	const colored =
+		paint(styler, CHROME_COLOR, "╭─ ") +
+		paint(styler, "accent", title) +
+		paint(styler, CHROME_COLOR, ` ${run}`) +
+		(right === ""
+			? ""
+			: paint(styler, CHROME_COLOR, " ") +
+				paint(styler, "muted", right) +
+				paint(styler, CHROME_COLOR, " ─╮"));
+	return colored;
 }
 
-export function borderMid(width: number, fit: FitFn): string {
+export function borderMid(width: number, _fit: FitFn, styler?: Styler): string {
 	const w = safeWidth(width);
-	if (w === 1) return fit("├", w);
-	return fit(`├${"─".repeat(Math.max(0, w - 2))}┤`, w);
+	if (w === 1) return paint(styler, CHROME_COLOR, "├");
+	return paint(styler, CHROME_COLOR, `├${"─".repeat(Math.max(0, w - 2))}┤`);
 }
 
-export function borderBottom(width: number, fit: FitFn): string {
+export function borderBottom(width: number, _fit: FitFn, styler?: Styler): string {
 	const w = safeWidth(width);
-	if (w === 1) return fit("╰", w);
-	return fit(`╰${"─".repeat(Math.max(0, w - 2))}╯`, w);
+	if (w === 1) return paint(styler, CHROME_COLOR, "╰");
+	return paint(styler, CHROME_COLOR, `╰${"─".repeat(Math.max(0, w - 2))}╯`);
 }
 
-export function boxLine(content: string, width: number, fit: FitFn): string {
+export function boxLine(content: string, width: number, fit: FitFn, styler?: Styler): string {
 	const w = safeWidth(width);
-	if (w === 1) return fit("│", w);
-	return `│${padCell(content, Math.max(0, w - 2), fit)}│`;
+	if (w === 1) return paint(styler, CHROME_COLOR, "│");
+	const bar = paint(styler, CHROME_COLOR, "│");
+	const inner = Math.max(0, w - 2);
+	const fitted = visibleCells(content) > inner ? fit(content, inner) : content;
+	return `${bar}${padStyledCell(fitted, inner)}${bar}`;
 }
 
 export function sectionTitle(title: string, kit: RenderKit): string {
-	return kit.styler("accent", roomText(title, Math.max(0, kit.width), kit.fit));
+	const text = roomText(title, Math.max(0, kit.width - 2), kit.fit);
+	return kit.styler("accent", kit.fit(`${SECTION_BAR} ${text}`, kit.width));
+}
+
+/** A dim, upper-cased subsection label — groups related kv() rows under a tab. */
+export function groupLabel(label: string, kit: RenderKit): string {
+	return kit.styler("dim", kit.fit(` ${label.toUpperCase()}`, kit.width));
 }
 
 export function kv(label: string, value: unknown, kit: RenderKit, valueCols?: number): string {
-	const l = kit.styler("muted", padCell(label, 16, kit.fit));
-	const v = roomText(value, valueCols ?? Math.max(0, kit.width - 18), kit.fit) || "—";
-	return fitLine(`  ${l} ${v}`, kit.width, kit.fit);
+	const labelCell = padCell(label, 16, kit.fit);
+	const valueCell = roomText(value, valueCols ?? Math.max(0, kit.width - 19), kit.fit);
+	const v = valueCell === "" ? kit.styler("dim", "—") : valueCell;
+	return `  ${kit.styler("muted", labelCell)} ${v}`;
 }
 
 export function bullet(glyph: string, text: unknown, kit: RenderKit, color = "text"): string {

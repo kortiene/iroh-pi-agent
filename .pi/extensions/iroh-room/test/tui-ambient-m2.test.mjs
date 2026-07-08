@@ -113,6 +113,13 @@ test("members poll: default cadence — only every 6th successful tail tick", as
 		controller.listMembers().map((member) => member.id).sort(),
 		[IDENTITY_ADMIN, IDENTITY_AGENT].sort(),
 	);
+	// The cockpit snapshot enriches the roster with status + is_admin (parsed
+	// from the same members poll) without changing the listMembers shape.
+	const roster = controller.getSnapshot().members;
+	const admin = roster.find((member) => member.id === IDENTITY_ADMIN);
+	const agent = roster.find((member) => member.id === IDENTITY_AGENT);
+	assert.deepEqual(admin, { id: IDENTITY_ADMIN, role: "admin", status: "active", isAdmin: true });
+	assert.deepEqual(agent, { id: IDENTITY_AGENT, role: "agent", status: "active", isAdmin: false });
 });
 
 test("members poll: defensive parse — junk JSON/shapes are silent, never a feed failure", async () => {
@@ -134,7 +141,51 @@ test("members poll: defensive parse — junk JSON/shapes are silent, never a fee
 	await shim.advance(5_000);
 	assert.deepEqual(ctx.ui.notifications, [], "no toast from malformed members output");
 	assert.deepEqual(controller.listMembers(), [], "invalid entries all dropped");
+	assert.deepEqual(controller.getSnapshot().members, [], "invalid entries also stay out of the cockpit roster");
 	assert.equal(ctx.ui.statuses.get(PULSE_STATUS_KEY), "iroh ●", "feed stays healthy");
+});
+
+test("members poll: admin fallback comes from top-level admin when is_admin is absent", async () => {
+	const { controller, shim } = makeController(
+		[
+			ok(IDENTITY_JSON),
+			ok(TAIL_JSON),
+			ok(`${JSON.stringify({
+				room: ROOM_ID,
+				admin: IDENTITY_ADMIN,
+				members: [
+					{ identity_id: IDENTITY_ADMIN, role: "admin", status: "active" },
+					{ identity_id: IDENTITY_AGENT, role: "agent", status: "active" },
+				],
+			})}\n`),
+		],
+		{ options: { membersEveryTicks: 1 } },
+	);
+	const ctx = tuiCtx();
+	await startController(controller, shim, ctx);
+	const admin = controller.getSnapshot().members.find((member) => member.id === IDENTITY_ADMIN);
+	const agent = controller.getSnapshot().members.find((member) => member.id === IDENTITY_AGENT);
+	assert.equal(admin?.isAdmin, true);
+	assert.equal(agent?.isAdmin, false, "top-level admin makes non-admin rows explicitly false");
+});
+
+test("members poll: manual refresh polls the roster immediately, not only every 6th tick", async () => {
+	const { controller, shim, calls } = makeController([
+		ok(IDENTITY_JSON),
+		ok(TAIL_JSON),
+		ok(TAIL_JSON),
+		ok(membersJson([IDENTITY_ADMIN, IDENTITY_AGENT])),
+	]);
+	const ctx = tuiCtx();
+	await startController(controller, shim, ctx);
+	assert.equal(calls.length, 2, "init tick is identity + tail only");
+	await controller.requestRefresh();
+	assert.equal(calls.length, 4, "manual refresh performs tail + immediate members poll");
+	assert.deepEqual(calls[3].args, MEMBERS_ARGS);
+	assert.deepEqual(
+		controller.getSnapshot().members.map((member) => member.id).sort(),
+		[IDENTITY_ADMIN, IDENTITY_AGENT].sort(),
+	);
 });
 
 test("members poll: baseline never toasts; later joins/removals toast via the diff", async () => {

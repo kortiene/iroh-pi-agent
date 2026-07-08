@@ -1,7 +1,7 @@
 /** Timeline tab renderer for the read-only Room Cockpit. */
 
 import type { CockpitSnapshot, TimelineEvent } from "./model.js";
-import { kv, sectionTitle, shortId, timeCell, type RenderKit } from "./layout.js";
+import { groupLabel, kv, sectionTitle, shortId, timeCell, type RenderKit } from "./layout.js";
 import { roomText } from "../sanitize.js";
 import { AUTHOR_COLS, STATUS_LABEL_COLS } from "../style.js";
 
@@ -23,10 +23,13 @@ export function timelineRow(event: TimelineEvent, selected: boolean, kit: Render
 	const author = roomText(event.author ?? "?", AUTHOR_COLS, kit.fit) || "?";
 	const typeRaw = event.type;
 	const type = TYPE_ABBREV[typeRaw] ?? (roomText(typeRaw, STATUS_LABEL_COLS, kit.fit) || "?");
-	const prefix = selected ? "›" : " ";
+	const prefix = selected ? "▌" : " ";
 	const used = prefix.length + 1 + time.length + 1 + author.length + 1 + type.length + 1;
 	const summary = roomText(event.summary, Math.max(0, kit.width - used), kit.fit);
-	const line = `${kit.styler(selected ? "accent" : "dim", prefix)} ${kit.styler("dim", time)} ${kit.styler("muted", author)} ${kit.styler("accent", type)} ${summary}`;
+	// Selected rows brighten the summary to "text"; unselected stay muted so the
+	// cursor row is obvious without a background fill.
+	const summaryCell = selected ? kit.styler("text", summary) : kit.styler("muted", summary);
+	const line = `${kit.styler(selected ? "accent" : "dim", prefix)} ${kit.styler("dim", time)} ${kit.styler(selected ? "text" : "muted", author)} ${kit.styler("accent", type)} ${summaryCell}`;
 	return kit.fit(line, kit.width);
 }
 
@@ -50,7 +53,7 @@ export function renderTimeline(snapshot: CockpitSnapshot, kit: RenderKit, select
 	}
 	const selected = events[clamped];
 	lines.push("");
-	lines.push(kit.styler("muted", "Inspector"));
+	lines.push(groupLabel("Inspector", kit));
 	if (selected !== undefined) {
 		lines.push(kv("event", shortId(selected.eventId), kit));
 		lines.push(kv("type", selected.type, kit));

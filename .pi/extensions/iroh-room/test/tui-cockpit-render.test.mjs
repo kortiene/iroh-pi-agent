@@ -42,7 +42,10 @@ function snapshot(overrides = {}) {
 			readyForReview: [],
 			done: [],
 		},
-		members: [],
+		members: [
+			{ id: IDENTITY_AGENT, role: "agent", status: "active", isAdmin: false },
+			{ id: "a".repeat(64), role: `admin ${HOSTILE_TICKET}`, status: `active ${HOSTILE_TICKET}`, isAdmin: true },
+		],
 		files: [],
 		pipes: [],
 		events: [
@@ -62,7 +65,15 @@ const keys = {
 	isRefresh: (data) => data === "r",
 	isEnter: (data) => data === "enter",
 	isReadOnlyAction: (data) => data === "c",
-	tabFor: (data) => ({ "1": "overview", "2": "timeline", "3": "tasks", "4": "health" })[data],
+	tabFor: (data) => ({ "1": "overview", "2": "timeline", "3": "tasks", "4": "members", "5": "health" })[data],
+};
+
+const ANSI_RE = /\x1b\[[0-?]*[ -/]*[@-~]/g;
+const ansiStyler = (color, text) => `\x1b[${color.length % 8 + 30}m${text}\x1b[0m`;
+const visibleLength = (text) => [...text.replace(ANSI_RE, "")].length;
+const ansiAwareFit = (text, width) => {
+	const plain = text.replace(ANSI_RE, "");
+	return visibleLength(text) <= width ? text : naiveFit(plain, width);
 };
 
 test("cockpit component renders every Phase 1 tab within width and sanitizes tickets/control codes", () => {
@@ -77,7 +88,7 @@ test("cockpit component renders every Phase 1 tab within width and sanitizes tic
 		onRefresh: async () => {},
 		requestRender: () => { renders++; },
 	});
-	for (const tab of ["1", "2", "3", "4"]) {
+	for (const tab of ["1", "2", "3", "4", "5"]) {
 		component.handleInput(tab);
 		for (const width of [100, 60, 24, 8]) {
 			const lines = component.render(width);
@@ -94,6 +105,30 @@ test("cockpit component renders every Phase 1 tab within width and sanitizes tic
 	component.handleInput("enter");
 	assert.ok(renders > 0);
 });
+
+test("cockpit colored chrome keeps exact visible width with an ANSI theme styler", () => {
+	const component = new CockpitComponent({
+		snapshot: snapshot(),
+		styler: ansiStyler,
+		fit: ansiAwareFit,
+		keys,
+		getHeight: () => 18,
+		onClose: () => {},
+		onRefresh: async () => {},
+		requestRender: () => {},
+	});
+	for (const tab of ["1", "2", "3", "4", "5"]) {
+		component.handleInput(tab);
+		for (const width of [100, 60, 24, 8, 1]) {
+			const lines = component.render(width);
+			assert.ok(lines.some((line) => line.includes("\x1b[")), "theme ANSI should be present");
+			for (const line of lines) {
+				assert.equal(visibleLength(line), width, `${tab}/${width}: ${JSON.stringify(line)}`);
+			}
+		}
+	}
+});
+
 
 test("/room-cockpit respects the TUI/RPC/JSON/print mode matrix", async () => {
 	const pi = stubPi();

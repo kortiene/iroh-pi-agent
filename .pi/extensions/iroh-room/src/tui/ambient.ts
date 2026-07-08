@@ -276,6 +276,10 @@ export class AmbientController implements AmbientLike {
 	private tailSuccessCount = 0;
 	/** id -> role from the last successful members poll (undefined = never). */
 	private members: Map<string, string> | undefined;
+	/** id -> extra display fields (status, is_admin) from the same poll; the
+	 * cockpit Members tab reads this. Kept parallel to `members` so the
+	 * completions/mentions roster (id->role) shape never changes. */
+	private memberMeta: Map<string, { status?: string; isAdmin?: boolean }> | undefined;
 	/** Pipe ids whose disappearance is OURS (tool/command close) — no toast.
 	 * Entries are consumed on the first matching disappearance; an entry for
 	 * a close that ultimately failed lingers and suppresses at most one later
@@ -554,7 +558,15 @@ export class AmbientController implements AmbientLike {
 				readyForReview,
 				done,
 			},
-			members: [...(this.members ?? new Map<string, string>())].map(([id, role]) => ({ id, role })),
+			members: [...(this.members ?? new Map<string, string>())].map(([id, role]) => {
+				const meta = this.memberMeta?.get(id);
+				return {
+					id,
+					role,
+					...(meta?.status !== undefined ? { status: meta.status } : {}),
+					...(meta?.isAdmin !== undefined ? { isAdmin: meta.isAdmin } : {}),
+				};
+			}),
 			files,
 			pipes: (this.pipes?.list() ?? []).map((pipe) => ({
 				id: pipe.pipeId,
@@ -822,7 +834,7 @@ export class AmbientController implements AmbientLike {
 		this.tailSuccessCount += 1;
 		let memberJoined: string[] = [];
 		let memberRemoved: string[] = [];
-		if (this.tailSuccessCount % this.membersEvery === 0) {
+		if (manual || this.tailSuccessCount % this.membersEvery === 0) {
 			const diff = await this.pollMembers(epoch, exec, bin, cfg, manual);
 			if (!this.pollValid(epoch, manual)) {
 				return;
@@ -919,23 +931,32 @@ export class AmbientController implements AmbientLike {
 		if (parsed === null || typeof parsed !== "object") {
 			return none;
 		}
-		const rawMembers = (parsed as { members?: unknown }).members;
+		const raw = parsed as { admin?: unknown; members?: unknown };
+		const adminId = typeof raw.admin === "string" && IDENTITY_ID_RE.test(raw.admin) ? raw.admin : undefined;
+		const rawMembers = raw.members;
 		if (!Array.isArray(rawMembers)) {
 			return none;
 		}
 		const next = new Map<string, string>();
+		const nextMeta = new Map<string, { status?: string; isAdmin?: boolean }>();
 		for (const entry of rawMembers) {
 			if (entry === null || typeof entry !== "object") {
 				continue;
 			}
-			const record = entry as { identity_id?: unknown; role?: unknown };
+			const record = entry as { identity_id?: unknown; role?: unknown; status?: unknown; is_admin?: unknown };
 			if (typeof record.identity_id !== "string" || !IDENTITY_ID_RE.test(record.identity_id)) {
 				continue;
 			}
 			next.set(record.identity_id, typeof record.role === "string" ? record.role : "member");
+			const isAdmin = typeof record.is_admin === "boolean" ? record.is_admin : adminId !== undefined ? record.identity_id === adminId : undefined;
+			nextMeta.set(record.identity_id, {
+				...(typeof record.status === "string" ? { status: record.status } : {}),
+				...(isAdmin !== undefined ? { isAdmin } : {}),
+			});
 		}
 		const prev = this.members;
 		this.members = next;
+		this.memberMeta = nextMeta;
 		if (prev === undefined) {
 			return none; // baseline: joins already in the room never toast
 		}
@@ -1128,6 +1149,7 @@ export class AmbientController implements AmbientLike {
 		this.identityAttempted = false;
 		this.tailSuccessCount = 0;
 		this.members = undefined;
+		this.memberMeta = undefined;
 		this.expectedCloses.clear();
 		this.prevPipeIds = undefined;
 		this.tailLook = undefined;

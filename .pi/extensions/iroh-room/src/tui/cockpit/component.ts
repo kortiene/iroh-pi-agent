@@ -12,9 +12,11 @@ import {
 	feedGlyph,
 	formatAge,
 	safeWidth,
+	sectionTitle,
 	shortRoom,
 	type RenderKit,
 } from "./layout.js";
+import { renderMembers } from "./members.js";
 import { COCKPIT_TABS, type CockpitKeyRouter, type CockpitSnapshot, type CockpitTab } from "./model.js";
 import { renderOverview } from "./overview.js";
 import { renderTasks } from "./tasks.js";
@@ -45,6 +47,7 @@ export class CockpitComponent {
 		overview: 0,
 		timeline: 0,
 		tasks: 0,
+		members: 0,
 		health: 0,
 	};
 	private showHelp = false;
@@ -84,26 +87,26 @@ export class CockpitComponent {
 		const kit: RenderKit = { styler: this.styler, fit: this.fit, width: Math.max(1, w - 4), now };
 		const room = shortRoom(this.snapshot.config.roomId);
 		const lines: string[] = [];
-		lines.push(borderTop("iroh-room cockpit", room, w, this.fit));
-		lines.push(boxLine(this.statusLine(now, Math.max(1, w - 4)), w, this.fit));
-		lines.push(borderMid(w, this.fit));
-		lines.push(boxLine(this.tabLine(Math.max(1, w - 4)), w, this.fit));
-		lines.push(borderMid(w, this.fit));
+		lines.push(borderTop("iroh-room cockpit", room, w, this.fit, this.styler));
+		lines.push(boxLine(this.statusLine(now, Math.max(1, w - 4)), w, this.fit, this.styler));
+		lines.push(borderMid(w, this.fit, this.styler));
+		lines.push(boxLine(this.tabLine(Math.max(1, w - 4)), w, this.fit, this.styler));
+		lines.push(borderMid(w, this.fit, this.styler));
 		const bodyHeight = Math.max(0, height - 8);
 		const body = this.showHelp ? this.helpLines(kit) : this.bodyLines(kit);
 		for (const line of body.slice(0, bodyHeight)) {
-			lines.push(boxLine(line, w, this.fit));
+			lines.push(boxLine(line, w, this.fit, this.styler));
 		}
 		while (lines.length < height - 3) {
-			lines.push(boxLine("", w, this.fit));
+			lines.push(boxLine("", w, this.fit, this.styler));
 		}
 		if (this.notice !== undefined) {
-			lines.push(boxLine(this.styler("warning", this.fit(this.notice, Math.max(1, w - 4))), w, this.fit));
+			lines.push(boxLine(this.noticeLine(Math.max(1, w - 4)), w, this.fit, this.styler));
 		} else {
-			lines.push(borderMid(w, this.fit));
+			lines.push(borderMid(w, this.fit, this.styler));
 		}
-		lines.push(boxLine(this.footerLine(Math.max(1, w - 4)), w, this.fit));
-		lines.push(borderBottom(w, this.fit));
+		lines.push(boxLine(this.footerLine(Math.max(1, w - 4)), w, this.fit, this.styler));
+		lines.push(borderBottom(w, this.fit, this.styler));
 		return clampLines(lines.slice(0, height), w, this.fit);
 	}
 
@@ -202,6 +205,8 @@ export class CockpitComponent {
 				return Math.max(0, this.snapshot.events.length - 1);
 			case "tasks":
 				return Math.max(0, this.snapshot.tasks.all.length - 1);
+			case "members":
+				return Math.max(0, this.snapshot.members.length - 1);
 			default:
 				return 0;
 		}
@@ -219,6 +224,8 @@ export class CockpitComponent {
 				return renderTimeline(this.snapshot, kit, this.selected.timeline);
 			case "tasks":
 				return renderTasks(this.snapshot, kit, this.selected.tasks);
+			case "members":
+				return renderMembers(this.snapshot, kit, this.selected.members);
 			case "health":
 				return renderHealth(this.snapshot, kit);
 			default:
@@ -227,34 +234,67 @@ export class CockpitComponent {
 	}
 
 	private helpLines(kit: RenderKit): string[] {
+		const row = (k: string, action: string): string => {
+			const keyPlain = k.padEnd(10);
+			const actionPlain = kit.fit(action, Math.max(0, kit.width - 12));
+			return `  ${kit.styler("accent", keyPlain)}${kit.styler("text", actionPlain)}`;
+		};
 		return [
-			kit.styler("accent", "Help"),
+			sectionTitle("Help", kit),
 			"",
-			"esc/q        close",
-			"?            toggle help",
-			"tab/S-tab    next/previous tab",
-			"1-4          overview/timeline/tasks/health",
-			"↑↓           move selection",
-			"enter        inspect selected row",
-			"r            request refresh through ambient poll path",
-			"/            search (future)",
+			row("esc / q", "close the cockpit"),
+			row("?", "toggle this help"),
+			row("tab / ⇧tab", "next / previous tab"),
+			row("1-5", "jump to overview / timeline / tasks / members / health"),
+			row("↑ ↓", "move the selection"),
+			row("↵", "inspect the selected row"),
+			row("r", "refresh through the ambient poll path"),
+			`  ${kit.styler("accent", "/".padEnd(10))}${kit.styler("dim", "search (coming soon)")}`,
 			"",
-			kit.styler("dim", "This first cockpit release is read-only. No room events, pipes, files, or model turns are triggered from this UI."),
+			kit.styler(
+				"dim",
+				kit.fit("Read-only build · no room events, pipes, files, or model turns are triggered here.", kit.width),
+			),
 		];
 	}
 
 	private tabLine(width: number): string {
 		const labels: Record<CockpitTab, string> = {
-			overview: "1 Overview",
-			timeline: "2 Timeline",
-			tasks: `3 Tasks~ ${this.snapshot.tasks.unclaimed.length}`,
-			health: "4 Health",
+			overview: "Overview",
+			timeline: "Timeline",
+			tasks: `Tasks~ ${this.snapshot.tasks.unclaimed.length}`,
+			members: `Members ${this.snapshot.members.length}`,
+			health: "Health",
 		};
-		const parts = COCKPIT_TABS.map((tab) => {
-			const text = labels[tab];
-			return tab === this.tab ? this.styler("accent", `[${text}]`) : this.styler("muted", ` ${text} `);
+		const plainParts = COCKPIT_TABS.map((tab, index) =>
+			tab === this.tab ? `▸${index + 1} ${labels[tab]}` : ` ${index + 1} ${labels[tab]}`,
+		);
+		const plain = plainParts.join(" · ");
+		if (plain.length > width) {
+			return this.styler("muted", this.fit(plain, width));
+		}
+		// Modern tab strip: active tab gets a leading bar + accent; the numeric
+		// hotkey stays dim so the label is what reads. A thin separator between
+		// tabs replaces the old double-space gap.
+		const parts = COCKPIT_TABS.map((tab, index) => {
+			const key = this.styler("dim", String(index + 1));
+			if (tab === this.tab) {
+				return `${this.styler("accent", "▸")}${key} ${this.styler("accent", labels[tab])}`;
+			}
+			return ` ${key} ${this.styler("muted", labels[tab])}`;
 		});
-		return this.fit(parts.join("  "), width);
+		return parts.join(this.styler("border", " · "));
+	}
+
+	private noticeLine(width: number): string {
+		const notice = this.notice ?? "";
+		const color = this.refreshing ? "accent" : "warning";
+		const plainNotice = this.fit(notice, Math.max(0, width - 2));
+		return `${this.styler(color, "•")} ${this.styler("warning", plainNotice)}`;
+	}
+
+	private chip(color: string, glyph: string, text: string): string {
+		return glyph === "" ? this.styler(color, text) : `${this.styler(color, glyph)} ${this.styler(color, text)}`;
 	}
 
 	private statusLine(now: number, width: number): string {
@@ -263,12 +303,55 @@ export class CockpitComponent {
 		const identity = this.snapshot.identity?.from8 ?? "no identity";
 		const status = this.snapshot.latest.status;
 		const statusText = status === undefined ? "no status" : `${status.label}${typeof status.progress === "number" ? ` ${status.progress}%` : ""}`;
-		const text = `${feedGlyph(state)} ${state} ${freshness} · ${identity} · ${statusText} · ${this.snapshot.pipes.length} pipes · ${this.snapshot.tasks.unclaimed.length} tasks~ · ${this.snapshot.events.length} events`;
-		return this.styler(feedColor(state), this.fit(text, width));
+		const tasks = this.snapshot.tasks.unclaimed.length;
+		const cells = [
+			{ plain: `${feedGlyph(state)} ${state} ${freshness}`, color: feedColor(state), glyph: feedGlyph(state), text: `${state} ${freshness}` },
+			{ plain: identity, color: "muted", glyph: "", text: identity },
+			{ plain: statusText, color: "text", glyph: "", text: statusText },
+			{ plain: `⇄ ${this.snapshot.pipes.length}`, color: "muted", glyph: "⇄", text: `${this.snapshot.pipes.length}` },
+			{ plain: `○ ${tasks}~`, color: tasks > 0 ? "warning" : "muted", glyph: "○", text: `${tasks}~` },
+			{ plain: `${this.snapshot.events.length} events`, color: "dim", glyph: "", text: `${this.snapshot.events.length} events` },
+		];
+		const visible: typeof cells = [];
+		for (const cell of cells) {
+			const nextPlain = [...visible.map((seen) => seen.plain), cell.plain].join(" · ");
+			if (nextPlain.length > width && visible.length > 0) break;
+			visible.push(cell);
+		}
+		const plain = visible.map((cell) => cell.plain).join(" · ");
+		if (plain.length > width) {
+			return this.styler(feedColor(state), this.fit(plain, width));
+		}
+		// Polychromatic status bar: the feed chip carries the state color; the
+		// rest are role-colored so identity/status/pipes/tasks stay legible
+		// instead of the whole row flipping to one alarm color.
+		return visible
+			.map((cell) => this.chip(cell.color, cell.glyph, cell.text))
+			.join(this.styler("border", " · "));
 	}
 
 	private footerLine(width: number): string {
-		const refreshing = this.refreshing ? " · refreshing" : "";
-		return this.fit(`↑↓ move · tab switch · enter inspect · r refresh · ? help · esc close${refreshing}`, width);
+		const entries: { key: string; action: string; color?: string }[] = [
+			{ key: "↑↓", action: "move" },
+			{ key: "tab", action: "switch" },
+			{ key: "↵", action: "inspect" },
+			{ key: "r", action: "refresh" },
+			{ key: "?", action: "help" },
+			{ key: "esc", action: "close" },
+		];
+		if (this.refreshing) entries.push({ key: "↻", action: "refreshing", color: "dim" });
+		const visible: typeof entries = [];
+		for (const entry of entries) {
+			const nextPlain = [...visible.map((seen) => `${seen.key} ${seen.action}`), `${entry.key} ${entry.action}`].join(" · ");
+			if (nextPlain.length > width && visible.length > 0) break;
+			visible.push(entry);
+		}
+		const plain = visible.map((entry) => `${entry.key} ${entry.action}`).join(" · ");
+		if (plain.length > width) return this.styler("muted", this.fit(plain, width));
+		// Key-cap styling: each shortcut key is accented, its action muted, so
+		// the hint row reads as a legend instead of one flat gray sentence.
+		return visible
+			.map((entry) => `${this.styler("accent", entry.key)} ${this.styler(entry.color ?? "muted", entry.action)}`)
+			.join(this.styler("border", " · "));
 	}
 }

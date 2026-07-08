@@ -89,7 +89,7 @@ test("real hostile corpus survives getSnapshot() → cockpit render on every tab
 		requestRender: () => {},
 	});
 
-	for (const tab of ["1", "2", "3", "4"]) {
+	for (const tab of ["1", "2", "3", "4", "5"]) {
 		component.handleInput(tab);
 		for (const width of [120, 80, 60, 40, 20, 8, 1]) {
 			let lines;
@@ -122,5 +122,43 @@ test("hostile inspector rows (selection) stay sanitized on timeline and tasks", 
 	for (let i = 0; i < snapshot.events.length + 2; i++) {
 		assertClean(component.render(80), `timeline inspector sel=${i}`);
 		component.handleInput("down");
+	}
+	// Members: walk the selection across the roster (may be empty on this feed).
+	component.handleInput("4");
+	for (let i = 0; i < Math.max(1, snapshot.members.length) + 2; i++) {
+		assertClean(component.render(80), `members inspector sel=${i}`);
+		component.handleInput("down");
+	}
+});
+
+test("hostile member roster (role/status) stays sanitized on the members tab", () => {
+	const HOSTILE = "\u001b[31mred\u001b[0m \u202Eevil roomtkt1qpzry9x8gf2tvdw0";
+	const snapshot = {
+		config: { roomId: ROOM_ID },
+		identity: { name: "pi-agent", identityId: "a".repeat(64), from8: "aaaaaaaa" },
+		feed: { state: "ok", lastOkAt: Date.now(), gap: false },
+		latest: {},
+		tasks: { all: [], unclaimed: [], claimed: [], readyForReview: [], done: [] },
+		members: [
+			{ id: "a".repeat(64), role: HOSTILE, status: HOSTILE, isAdmin: true },
+			{ id: "b".repeat(64), role: HOSTILE, status: HOSTILE, isAdmin: false },
+		],
+		files: [],
+		pipes: [],
+		events: [],
+	};
+	const component = new CockpitComponent({
+		snapshot,
+		styler: identityStyler,
+		fit: naiveFit,
+		keys: cockpitKeys,
+		getHeight: () => 24,
+		onClose: () => {},
+		onRefresh: async () => {},
+		requestRender: () => {},
+	});
+	component.handleInput("4");
+	for (const width of [120, 80, 40, 20, 8, 1]) {
+		assertClean(component.render(width), `members hostile width=${width}`);
 	}
 });

@@ -5,6 +5,7 @@ import {
 	feedColor,
 	feedGlyph,
 	formatAge,
+	groupLabel,
 	kv,
 	sectionTitle,
 	shortId,
@@ -14,11 +15,13 @@ import {
 import { roomText } from "../sanitize.js";
 import { GLYPHS } from "../style.js";
 
+const group = groupLabel;
+
 export function renderOverview(snapshot: CockpitSnapshot, kit: RenderKit): string[] {
 	const lines: string[] = [];
 	lines.push(sectionTitle("Overview", kit));
 	lines.push("");
-	lines.push(kit.styler("muted", "Room"));
+	lines.push(group("Room", kit));
 	lines.push(kv("id", snapshot.config.roomId ?? "(not configured)", kit));
 	lines.push(kv("label", snapshot.config.roomLabel ?? "(none)", kit));
 	const feed = `${feedGlyph(snapshot.feed.state)} ${snapshot.feed.state}${
@@ -32,7 +35,7 @@ export function renderOverview(snapshot: CockpitSnapshot, kit: RenderKit): strin
 		lines.push(`  ${kit.styler("muted", "gap".padEnd(16))} ${kit.styler("warning", "tail window overrun; deep repair pending")}`);
 	}
 	lines.push("");
-	lines.push(kit.styler("muted", "Agent"));
+	lines.push(group("Agent", kit));
 	if (snapshot.identity !== undefined) {
 		lines.push(kv("name", snapshot.identity.name, kit));
 		lines.push(kv("id", `${snapshot.identity.from8}…`, kit));
@@ -44,7 +47,7 @@ export function renderOverview(snapshot: CockpitSnapshot, kit: RenderKit): strin
 	}
 	lines.push(kv("binary", snapshot.config.binary ?? "(unknown)", kit));
 	lines.push("");
-	lines.push(kit.styler("muted", "Activity"));
+	lines.push(group("Activity", kit));
 	if (snapshot.latest.status !== undefined) {
 		const status = snapshot.latest.status;
 		const progress = typeof status.progress === "number" ? ` ${status.progress}%` : "";
@@ -59,6 +62,7 @@ export function renderOverview(snapshot: CockpitSnapshot, kit: RenderKit): strin
 		lines.push(kv("latest event", "(none)", kit));
 	}
 	lines.push(kv("recent events", String(snapshot.events.length), kit));
+	lines.push(kv("members", `${snapshot.members.length} in room`, kit));
 	lines.push(kv("tasks~", `${snapshot.tasks.unclaimed.length} unclaimed`, kit));
 	lines.push(kv("pipes", `${snapshot.pipes.filter((pipe) => pipe.state === "open").length} active`, kit));
 	lines.push(kv("artifacts", `${snapshot.files.length} visible`, kit));
