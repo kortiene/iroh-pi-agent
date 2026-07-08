@@ -327,14 +327,20 @@ export async function driveTaskWithPi(ctx: WorkerContext, task: RoomTask): Promi
     }
 
     const summary = truncateBytes(await driver.getLastAssistantText(), MAX_MESSAGE_BODY_BYTES - 512);
+    const reviewable = state.status === 'ready_for_review';
     const handoff = [
-      `Task ${task.id} is ready for review.`,
+      reviewable ? `Task ${task.id} is ready for review.` : `Task ${task.id} is not ready for review.`,
+      '',
+      'Outcome:',
+      reviewable ? 'Pi completed successfully.' : `Pi ended with status "${state.status}".`,
       '',
       'Summary:',
       summary.trim() === '' ? '(Pi completed without a final assistant summary.)' : summary.trim(),
       '',
       'Artifacts: none published by the worker yet.',
-      'Next steps: review the room status trail and repository diff.',
+      reviewable
+        ? 'Next steps: review the room status trail and repository diff.'
+        : 'Next steps: inspect the failed/blocked status trail and rerun after fixing the cause.',
     ].join('\n');
     const sent = ctx.run(ctx.binPath, buildRoomSendArgs(ctx.cli, { roomId: ctx.roomId, message: handoff }));
     if (sent.returncode !== 0) {

@@ -159,7 +159,23 @@ describe('pollOnce decision tree', () => {
     expect(runner.calls.filter((args) => args.includes('planning'))).toHaveLength(1);
     expect(runner.calls.filter((args) => args.includes('implementing'))).toHaveLength(1);
     expect(runner.calls.filter((args) => args.includes('ready_for_review'))).toHaveLength(1);
-    expect(runner.calls.at(-1)).toContain('Task IR-PI-001 is ready for review.\n\nSummary:\nimplemented the requested task\n\nArtifacts: none published by the worker yet.\nNext steps: review the room status trail and repository diff.');
+    expect(runner.calls.at(-1)).toContain('Task IR-PI-001 is ready for review.\n\nOutcome:\nPi completed successfully.\n\nSummary:\nimplemented the requested task\n\nArtifacts: none published by the worker yet.\nNext steps: review the room status trail and repository diff.');
+  });
+
+  it('does not send a ready-for-review handoff when Pi ends failed', async () => {
+    const driver = fakePiDriver([
+      { type: 'agent_start' },
+      { type: 'agent_end', messages: [{ role: 'assistant', stopReason: 'error' }] },
+    ]);
+    const runner = makeRunner([{ ...OK, stdout: tailStdout([taskRow(EVENT_A, taskBlock('IR-PI-FAIL'))]) }]);
+    const ctx = makeCtx(runner, { driver });
+
+    expect(await pollOnce(ctx, true)).toBe(true);
+
+    expect(runner.calls.filter((args) => args.includes('failed'))).toHaveLength(1);
+    const handoff = runner.calls.at(-1);
+    expect(handoff?.some((arg) => arg.includes('Task IR-PI-FAIL is not ready for review.\n\nOutcome:\nPi ended with status "failed".'))).toBe(true);
+    expect(handoff?.some((arg) => arg.includes('Next steps: inspect the failed/blocked status trail and rerun after fixing the cause.'))).toBe(true);
   });
 
   it('posts blocked when the Pi RPC drive fails after claim', async () => {

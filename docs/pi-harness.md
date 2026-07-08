@@ -485,6 +485,70 @@ Two gotchas, both fail-closed by design:
 Remember the trust gotcha: a headless `pi` only loads this project's `.pi/`
 resources with `--approve`/`-a` or a saved trust decision.
 
+### Headless worker smoke test
+
+Use this after changing `tools/pi-room-agent/src/main.ts` or the Pi RPC client.
+The smoke test intentionally starts with a dry-run because `--once` acts on the
+current backlog and will claim any new `room-task` rows it sees.
+
+```bash
+ROOM_ID=blake3:<64-hex>
+AGENT_HOME="$HOME/.iroh-pi-agent"
+IROH_ROOMS_BIN=/absolute/path/to/iroh-rooms
+
+cd /path/to/iroh-pi-agent
+
+# 1. Non-mutating preflight. This prints planned argv and reads the offline
+# tail if the binary is configured. It must not send messages or statuses.
+IROH_ROOMS_BIN="$IROH_ROOMS_BIN" \
+  npm --prefix tools/pi-room-agent start -- \
+  --once --dry-run --room "$ROOM_ID" --data-dir "$AGENT_HOME"
+
+# 2. Post a small explicit smoke task. Avoid source edits until the worker has
+# artifact publication and claim-conflict handling.
+TASK_ID="IR-PI-SMOKE-$(date +%Y%m%d%H%M%S)"
+"$IROH_ROOMS_BIN" --data-dir="$AGENT_HOME" room send -- "$ROOM_ID" "\`\`\`room-task
+id: $TASK_ID
+type: document
+title: Headless worker smoke test
+goal: Verify the headless worker can drive Pi RPC. Create a tiny markdown
+  report under artifacts/worker-smoke/ and do not edit source files.
+acceptance:
+  - Create artifacts/worker-smoke/$TASK_ID.md with a one-paragraph note.
+  - Do not modify source files for this smoke task.
+\`\`\`"
+
+# 3. Run the real worker from the repo root so Pi can see this project's .pi/
+# resources. Bound the run; a hung child should not leave your terminal stuck.
+IROH_ROOMS_BIN="$IROH_ROOMS_BIN" \
+  timeout 300 npm --prefix tools/pi-room-agent start -- \
+  --once --room "$ROOM_ID" --data-dir "$AGENT_HOME"
+
+# 4. Inspect the result.
+"$IROH_ROOMS_BIN" --data-dir="$AGENT_HOME" \
+  room tail --offline --json --limit 120 -- "$ROOM_ID" \
+  > /tmp/iroh-room-headless-smoke-tail.json
+node .pi/skills/iroh-room-agent/scripts/summarize-room-tail.ts \
+  /tmp/iroh-room-headless-smoke-tail.json --recent 20
+```
+
+Expected minimum trail:
+
+```text
+message.text   Claiming task <TASK_ID> as pi-agent...
+agent.status   claimed
+agent.status   planning
+agent.status   implementing/testing (when Pi reaches tools/tests)
+agent.status   ready_for_review | failed | blocked
+message.text   final handoff
+```
+
+If Pi ends `failed` or `blocked`, the final handoff must say the task is **not**
+ready for review. A real smoke on 2026-07-08 verified claim + planning + failed
+status + handoff, and caught a bug where failed runs still emitted a
+ready-for-review handoff; the worker now gates the handoff text on the final
+mapped status.
+
 ## Security notes
 
 - **Identity isolation.** The agent uses its own `iroh-rooms` identity in its
