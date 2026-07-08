@@ -6,7 +6,7 @@
  * roomText() before display.
  */
 
-export const COCKPIT_TABS = ["overview", "timeline", "tasks", "members", "health"] as const;
+export const COCKPIT_TABS = ["overview", "timeline", "tasks", "members", "pipes", "health"] as const;
 
 export type CockpitTab = (typeof COCKPIT_TABS)[number];
 

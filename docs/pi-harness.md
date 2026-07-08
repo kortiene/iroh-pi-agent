@@ -263,7 +263,7 @@ are closed on session shutdown.
 | `/room-preview [--tcp 127.0.0.1:<port>] [--allow <64-hex>]... \| --close [pipe_id]` | Open a loopback preview pipe (defaults come from config), **or** close one/all with `--close` — an exclusive mode that cannot be combined with `--tcp`/`--allow`. |
 | `/room-tail [limit]` | Render a recent-events snapshot. |
 | `/room-pulse [off\|pill\|1\|2]` | Set the ambient pulse density; with no argument, cycle it (also bound to `ctrl+alt+r`). |
-| `/room-cockpit [open\|overlay\|close\|refresh\|tab <overview\|timeline\|tasks\|members\|health>]` | Open the read-only room cockpit in TUI mode; `overlay` opens it as a right-side overlay. |
+| `/room-cockpit [open\|overlay\|close\|refresh\|tab <overview\|timeline\|tasks\|members\|pipes\|health>]` | Open the read-only room cockpit in TUI mode; `overlay` opens it as a right-side overlay. |
 
 A flag given without its value (e.g. a trailing `--tcp`) is a usage error, not
 a silent fallback to the config default. Free-text arguments (messages, status

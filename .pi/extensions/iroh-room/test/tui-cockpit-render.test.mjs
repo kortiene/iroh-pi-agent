@@ -47,7 +47,9 @@ function snapshot(overrides = {}) {
 			{ id: "a".repeat(64), role: `admin ${HOSTILE_TICKET}`, status: `active ${HOSTILE_TICKET}`, isAdmin: true },
 		],
 		files: [],
-		pipes: [],
+		pipes: [
+			{ id: "b".repeat(32), target: "127.0.0.1:3000", label: `preview ${HOSTILE_TICKET}`, state: "open", trustedLocal: true, startedAt: Date.now() - 5_000 },
+		],
 		events: [
 			{ eventId: "blake3:" + "a".repeat(64), type: "message.text", author: "mallory", timestamp: "2026-07-07T12:34:00Z", lamport: 3, summary: `hello \u001b[31mred\u001b[0m ${HOSTILE_TICKET}` },
 		],
@@ -65,7 +67,7 @@ const keys = {
 	isRefresh: (data) => data === "r",
 	isEnter: (data) => data === "enter",
 	isReadOnlyAction: (data) => data === "c",
-	tabFor: (data) => ({ "1": "overview", "2": "timeline", "3": "tasks", "4": "members", "5": "health" })[data],
+	tabFor: (data) => ({ "1": "overview", "2": "timeline", "3": "tasks", "4": "members", "5": "pipes", "6": "health" })[data],
 };
 
 const ANSI_RE = /\x1b\[[0-?]*[ -/]*[@-~]/g;
@@ -88,7 +90,7 @@ test("cockpit component renders every Phase 1 tab within width and sanitizes tic
 		onRefresh: async () => {},
 		requestRender: () => { renders++; },
 	});
-	for (const tab of ["1", "2", "3", "4", "5"]) {
+	for (const tab of ["1", "2", "3", "4", "5", "6"]) {
 		component.handleInput(tab);
 		for (const width of [100, 60, 24, 8]) {
 			const lines = component.render(width);
@@ -117,7 +119,7 @@ test("cockpit colored chrome keeps exact visible width with an ANSI theme styler
 		onRefresh: async () => {},
 		requestRender: () => {},
 	});
-	for (const tab of ["1", "2", "3", "4", "5"]) {
+	for (const tab of ["1", "2", "3", "4", "5", "6"]) {
 		component.handleInput(tab);
 		for (const width of [100, 60, 24, 8, 1]) {
 			const lines = component.render(width);

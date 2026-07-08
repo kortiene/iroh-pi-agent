@@ -30,7 +30,8 @@ export const cockpitKeys: CockpitKeyRouter = {
 		if (data === "2" || key(data, "2")) return "timeline";
 		if (data === "3" || key(data, "3")) return "tasks";
 		if (data === "4" || key(data, "4")) return "members";
-		if (data === "5" || key(data, "5")) return "health";
+		if (data === "5" || key(data, "5")) return "pipes";
+		if (data === "6" || key(data, "6")) return "health";
 		return undefined;
 	},
 };

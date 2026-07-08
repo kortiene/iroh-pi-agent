@@ -19,6 +19,7 @@ import {
 import { renderMembers } from "./members.js";
 import { COCKPIT_TABS, type CockpitKeyRouter, type CockpitSnapshot, type CockpitTab } from "./model.js";
 import { renderOverview } from "./overview.js";
+import { renderPipes } from "./pipes.js";
 import { renderTasks } from "./tasks.js";
 import { renderTimeline } from "./timeline.js";
 
@@ -48,6 +49,7 @@ export class CockpitComponent {
 		timeline: 0,
 		tasks: 0,
 		members: 0,
+		pipes: 0,
 		health: 0,
 	};
 	private showHelp = false;
@@ -207,6 +209,8 @@ export class CockpitComponent {
 				return Math.max(0, this.snapshot.tasks.all.length - 1);
 			case "members":
 				return Math.max(0, this.snapshot.members.length - 1);
+			case "pipes":
+				return Math.max(0, this.snapshot.pipes.length - 1);
 			default:
 				return 0;
 		}
@@ -226,6 +230,8 @@ export class CockpitComponent {
 				return renderTasks(this.snapshot, kit, this.selected.tasks);
 			case "members":
 				return renderMembers(this.snapshot, kit, this.selected.members);
+			case "pipes":
+				return renderPipes(this.snapshot, kit, this.selected.pipes);
 			case "health":
 				return renderHealth(this.snapshot, kit);
 			default:
@@ -245,7 +251,7 @@ export class CockpitComponent {
 			row("esc / q", "close the cockpit"),
 			row("?", "toggle this help"),
 			row("tab / ⇧tab", "next / previous tab"),
-			row("1-5", "jump to overview / timeline / tasks / members / health"),
+			row("1-6", "jump to overview / timeline / tasks / members / pipes / health"),
 			row("↑ ↓", "move the selection"),
 			row("↵", "inspect the selected row"),
 			row("r", "refresh through the ambient poll path"),
@@ -264,6 +270,7 @@ export class CockpitComponent {
 			timeline: "Timeline",
 			tasks: `Tasks~ ${this.snapshot.tasks.unclaimed.length}`,
 			members: `Members ${this.snapshot.members.length}`,
+			pipes: `Pipes ${this.snapshot.pipes.length}`,
 			health: "Health",
 		};
 		const plainParts = COCKPIT_TABS.map((tab, index) =>

@@ -89,7 +89,7 @@ test("real hostile corpus survives getSnapshot() → cockpit render on every tab
 		requestRender: () => {},
 	});
 
-	for (const tab of ["1", "2", "3", "4", "5"]) {
+	for (const tab of ["1", "2", "3", "4", "5", "6"]) {
 		component.handleInput(tab);
 		for (const width of [120, 80, 60, 40, 20, 8, 1]) {
 			let lines;
@@ -129,6 +129,12 @@ test("hostile inspector rows (selection) stay sanitized on timeline and tasks", 
 		assertClean(component.render(80), `members inspector sel=${i}`);
 		component.handleInput("down");
 	}
+	// Pipes: walk the selection across active local pipes (may be empty here).
+	component.handleInput("5");
+	for (let i = 0; i < Math.max(1, snapshot.pipes.length) + 2; i++) {
+		assertClean(component.render(80), `pipes inspector sel=${i}`);
+		component.handleInput("down");
+	}
 });
 
 test("hostile member roster (role/status) stays sanitized on the members tab", () => {
@@ -160,5 +166,36 @@ test("hostile member roster (role/status) stays sanitized on the members tab", (
 	component.handleInput("4");
 	for (const width of [120, 80, 40, 20, 8, 1]) {
 		assertClean(component.render(width), `members hostile width=${width}`);
+	}
+});
+
+test("hostile pipe labels stay sanitized on the pipes tab", () => {
+	const HOSTILE = "\u001b[31mred\u001b[0m \u202Eevil roomtkt1qpzry9x8gf2tvdw0";
+	const snapshot = {
+		config: { roomId: ROOM_ID },
+		identity: { name: "pi-agent", identityId: "a".repeat(64), from8: "aaaaaaaa" },
+		feed: { state: "ok", lastOkAt: Date.now(), gap: false },
+		latest: {},
+		tasks: { all: [], unclaimed: [], claimed: [], readyForReview: [], done: [] },
+		members: [],
+		files: [],
+		pipes: [
+			{ id: "a".repeat(32), target: "127.0.0.1:3000", label: HOSTILE, state: "open", trustedLocal: true, startedAt: Date.now() - 1_000 },
+		],
+		events: [],
+	};
+	const component = new CockpitComponent({
+		snapshot,
+		styler: identityStyler,
+		fit: naiveFit,
+		keys: cockpitKeys,
+		getHeight: () => 24,
+		onClose: () => {},
+		onRefresh: async () => {},
+		requestRender: () => {},
+	});
+	component.handleInput("5");
+	for (const width of [120, 80, 40, 20, 8, 1]) {
+		assertClean(component.render(width), `pipes hostile width=${width}`);
 	}
 });
