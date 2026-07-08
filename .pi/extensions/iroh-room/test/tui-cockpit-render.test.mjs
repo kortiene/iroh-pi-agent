@@ -92,7 +92,7 @@ test("cockpit component renders every Phase 1 tab within width and sanitizes tic
 		onRefresh: async () => {},
 		requestRender: () => { renders++; },
 	});
-	for (const tab of ["1", "2", "3", "4", "5", "6", "7"]) {
+	for (const tab of ["1", "2", "3", "4", "5", "6", "7", "8"]) {
 		component.handleInput(tab);
 		for (const width of [100, 60, 24, 8]) {
 			const lines = component.render(width);
@@ -121,7 +121,7 @@ test("cockpit colored chrome keeps exact visible width with an ANSI theme styler
 		onRefresh: async () => {},
 		requestRender: () => {},
 	});
-	for (const tab of ["1", "2", "3", "4", "5", "6", "7"]) {
+	for (const tab of ["1", "2", "3", "4", "5", "6", "7", "8"]) {
 		component.handleInput(tab);
 		for (const width of [100, 60, 24, 8, 1]) {
 			const lines = component.render(width);

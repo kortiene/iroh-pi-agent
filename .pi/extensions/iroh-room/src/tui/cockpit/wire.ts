@@ -33,6 +33,7 @@ export const cockpitKeys: CockpitKeyRouter = {
 		if (data === "5" || key(data, "5")) return "artifacts";
 		if (data === "6" || key(data, "6")) return "pipes";
 		if (data === "7" || key(data, "7")) return "health";
+		if (data === "8" || key(data, "8")) return "settings";
 		return undefined;
 	},
 };

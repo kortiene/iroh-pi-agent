@@ -67,11 +67,12 @@ function makeComponent(snap) {
 }
 
 test("members is a registered tab reachable by hotkey 4 (artifacts 5, pipes 6, health 7)", () => {
-	assert.deepEqual([...COCKPIT_TABS], ["overview", "timeline", "tasks", "members", "artifacts", "pipes", "health"]);
+	assert.deepEqual([...COCKPIT_TABS], ["overview", "timeline", "tasks", "members", "artifacts", "pipes", "health", "settings"]);
 	assert.equal(cockpitKeys.tabFor("4"), "members");
 	assert.equal(cockpitKeys.tabFor("5"), "artifacts");
 	assert.equal(cockpitKeys.tabFor("6"), "pipes");
 	assert.equal(cockpitKeys.tabFor("7"), "health");
+	assert.equal(cockpitKeys.tabFor("8"), "settings");
 	const component = makeComponent(snapshot());
 	component.handleInput("4");
 	const body = component.render(100).join("\n");

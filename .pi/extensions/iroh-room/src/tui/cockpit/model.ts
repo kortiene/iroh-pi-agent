@@ -6,7 +6,7 @@
  * roomText() before display.
  */
 
-export const COCKPIT_TABS = ["overview", "timeline", "tasks", "members", "artifacts", "pipes", "health"] as const;
+export const COCKPIT_TABS = ["overview", "timeline", "tasks", "members", "artifacts", "pipes", "health", "settings"] as const;
 
 export type CockpitTab = (typeof COCKPIT_TABS)[number];
 
@@ -69,6 +69,7 @@ export interface CockpitSnapshot {
 		binary?: string;
 		dataDir?: string;
 		agentName?: string;
+		pulseDensity?: string;
 		configFile?: string;
 		cwd?: string;
 	};

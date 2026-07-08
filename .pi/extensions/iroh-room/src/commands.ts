@@ -654,7 +654,7 @@ export function registerIrohCommands(pi: ExtensionAPI, options: IrohRoomOptions 
 	});
 
 	const cockpitUsage =
-		"usage: /room-cockpit [open|overlay|close|refresh|tab overview|tab timeline|tab tasks|tab members|tab artifacts|tab pipes|tab health]";
+		"usage: /room-cockpit [open|overlay|close|refresh|tab overview|tab timeline|tab tasks|tab members|tab artifacts|tab pipes|tab health|tab settings]";
 	const isCockpitTab = (value: string | undefined): value is CockpitTab =>
 		value !== undefined && (COCKPIT_TABS as readonly string[]).includes(value);
 

@@ -89,7 +89,7 @@ test("real hostile corpus survives getSnapshot() → cockpit render on every tab
 		requestRender: () => {},
 	});
 
-	for (const tab of ["1", "2", "3", "4", "5", "6", "7"]) {
+	for (const tab of ["1", "2", "3", "4", "5", "6", "7", "8"]) {
 		component.handleInput(tab);
 		for (const width of [120, 80, 60, 40, 20, 8, 1]) {
 			let lines;

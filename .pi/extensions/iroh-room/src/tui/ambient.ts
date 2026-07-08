@@ -533,6 +533,7 @@ export class AmbientController implements AmbientLike {
 				...(this.lastBinary !== undefined ? { binary: this.lastBinary } : this.cfg?.binOverride !== undefined ? { binary: this.cfg.binOverride } : {}),
 				...(this.cfg?.home !== undefined ? { dataDir: this.cfg.home } : {}),
 				...(this.cfg?.agentName !== undefined ? { agentName: this.cfg.agentName } : {}),
+				pulseDensity: this.density,
 				...(this.cfg?.configFilePath !== undefined ? { configFile: this.cfg.configFilePath } : {}),
 				...(this.cfg?.cwd !== undefined ? { cwd: this.cfg.cwd } : {}),
 			},
