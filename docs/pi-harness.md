@@ -16,7 +16,7 @@ new event types.
   tools and `/room*` slash commands that wrap the `iroh-rooms` CLI.
 - A Pi skill (`.pi/skills/iroh-room-agent/`) that teaches the model safe
   room-agent behavior, plus prompt templates for implement/review/debug flows.
-- A scaffolded headless worker (`tools/pi-room-agent/`) for autonomous
+- A headless worker (`tools/pi-room-agent/`) for autonomous
   operation via Pi's RPC mode.
 
 **It is not:**
@@ -451,10 +451,13 @@ mode (`pi --mode rpc`, JSONL over stdin/stdout) → map Pi lifecycle events to
 `implementing`, test-ish bash → `testing`, `agent_end` → `ready_for_review` or
 `failed`) → share artifacts → optionally expose a preview pipe.
 
-Current status: **scaffold**. Config loading, the task parser, the status
-mapper, and CLI arg-builders/parsers are implemented and unit-tested; the Pi
-RPC drive, artifact publisher, and preview pipe are compiling stubs with
-documented TODOs. Try it with:
+Current status: **unit-tested worker, integration pending**. Config loading,
+the task parser, the status mapper, CLI arg-builders/parsers, poll-diff
+claiming, the injectable Pi RPC drive, lifecycle status mirroring, and final
+handoff messaging are implemented and unit-tested. The Pi RPC client, artifact
+publisher, and preview pipe modules compile, but still need real end-to-end
+coverage; artifact publication and worker preview integration remain next
+steps. Try it with:
 
 ```bash
 cd tools/pi-room-agent

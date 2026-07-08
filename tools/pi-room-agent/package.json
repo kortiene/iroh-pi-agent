@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.0.1",
   "type": "module",
-  "description": "Headless iroh-room worker scaffold: polls a room tail, detects room-task blocks, and (future) drives Pi over RPC to execute them.",
+  "description": "Headless iroh-room worker: polls a room tail, detects room-task blocks, claims tasks, and drives Pi over RPC.",
   "engines": {
     "node": ">=20.19"
   },

@@ -1,6 +1,6 @@
-# pi-room-agent — headless iroh-room worker (SCAFFOLD)
+# pi-room-agent — headless iroh-room worker
 
-Phase 3 scaffold (SPEC.md §15 / §20) of the headless worker that lets a
+Phase 3 worker (SPEC.md §15 / §20) that lets a
 Pi-powered agent operate inside an iroh-room without a human at the terminal:
 tail the room, detect ` ```room-task ` blocks, claim eligible tasks, drive Pi
 over its RPC mode, stream Pi lifecycle events back as `agent.status`
@@ -14,7 +14,7 @@ transitions, and share final artifacts.
 | `src/task-parser.ts` | REAL + tested. Canonical hand-rolled parser for the ` ```room-task ` YAML subset; never throws, returns `{tasks, errors}`. |
 | `src/status-mapper.ts` | REAL + tested. Pure fold from Pi RPC events to `agent.status` transitions + `STATUS_VOCABULARY`. |
 | `src/room-cli.ts` | REAL. Pure argv builders + stdout parsers (fixture-tested against the exact iroh-rooms 0.1.0 output formats) + secret redaction. The `spawnSync` runner is intentionally thin and untested. |
-| `src/main.ts` | SCAFFOLD, tested orchestration. Arg parsing, config load, identity verify, poll-diff tail loop (mandatory startup priming with retry), task detection, claim plumbing all work and are covered by `test/main.test.ts` via an injected runner; the Pi drive is a TODO stub (posts `blocked` after claiming so the room sees an honest signal). Import-safe: `main()` only runs when executed directly. |
+| `src/main.ts` | REAL + unit-tested orchestration. Arg parsing, config load, identity verify, poll-diff tail loop (mandatory startup priming with retry), task detection, claim plumbing, injectable Pi RPC drive, lifecycle-to-status mapping, and final handoff message are covered by `test/main.test.ts` via injected runners/drivers. Import-safe: `main()` only runs when executed directly. |
 | `src/pi-rpc.ts` | SCAFFOLD. Protocol-correct JSONL client for `pi --mode rpc --no-session -a` (StringDecoder + manual `\n` scan — Node readline is not RPC-compliant). Compiles; not exercised end-to-end. |
 | `src/preview-pipe.ts` | SCAFFOLD. Background `pipe expose` supervisor (resolve on `pipe_id:`, SIGINT→SIGKILL close, registry). Compiles; not exercised end-to-end. |
 | `src/artifact-publisher.ts` | SCAFFOLD. Fail-closed artifact path validation (exists, regular file, ≤100 MiB, symlink-resolved workspace containment) + `file share` round-trip. Compiles; not exercised end-to-end. |
@@ -78,19 +78,19 @@ config file, or invalid inputs produce clear errors and nothing is sent.
 
 ## Next steps (in order)
 
-1. Enable the Pi drive: wire `PiRpcClient` + `mapPiEventToStatus` into
-   `main.ts` `driveTaskWithPi()` (the wiring is sketched there), sending the
-   task through the `.pi/prompts/room-implement.md` template.
+1. Add integration coverage against a real `pi --mode rpc` child and a real
+   `iroh-rooms` room; the Pi drive is wired and unit-tested, but not yet
+   exercised end-to-end.
 2. Publish artifacts on `agent_end` via `artifact-publisher.ts` and post
    `ready_for_review` with the collected `file_…` ids + the SPEC §11.3
    handoff message.
 3. Claim-conflict resolution: scan the tail for existing claims of a task id
-   before claiming (currently a TODO; out of MVP scope per DESIGN §12).
-4. Integration tests against a real `iroh-rooms` binary (loopback network
-   stack) and a real `pi --mode rpc` child.
+   before claiming (currently a TODO; out of MVP scope per SPEC.md §20 / docs/pi-harness.md).
+4. Preview pipe integration from the worker (`preview_available` status and
+   lifecycle handling).
 5. Longer term: replace the RPC subprocess with the Pi SDK
    (`createAgentSession`) for typed, in-process control (SPEC §15.3).
 
-Out of scope for MVP (DESIGN §12): new protocol events, `iroh_file_fetch`,
+Out of scope for MVP (SPEC.md §20 / docs/pi-harness.md): new protocol events, `iroh_file_fetch`,
 live tail streaming, task scheduling, budget enforcement, sandboxing,
 multi-agent coordination.

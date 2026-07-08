@@ -1,5 +1,5 @@
 /**
- * pi-room-agent headless worker entry point (SPEC.md §15, DESIGN.md §7).
+ * pi-room-agent headless worker entry point (SPEC.md §15 / §20, docs/pi-harness.md §Headless worker).
  * Compiles and runs end-to-end WITHOUT network:
  *
  *   npm start -- --once --dry-run     # print planned CLI argv, no sends
@@ -11,10 +11,9 @@
  * seen event_ids, room-task detection in message.text bodies, and the
  * claim-message + agent.status transition plumbing.
  *
- * What is stubbed: the actual Pi RPC drive of a claimed task. The wiring is
- * sketched below (see driveTaskWithPi) but not enabled; after claiming, the
- * worker posts `blocked` so humans in the room can see the claim is not
- * progressing. See README "next steps".
+ * What is real-but-young: the Pi RPC drive is wired through an injectable
+ * driver factory and unit-tested without spawning Pi. It still needs an
+ * integration test against a real `pi --mode rpc` child and a real room.
  *
  * The module is import-safe: main() only runs when the file is executed
  * directly (entry-point guard below), so tests can import pollOnce/
@@ -47,10 +46,10 @@ import {
 import { parseRoomTasks, type RoomTask } from './task-parser.js';
 
 // Imported so the intended wiring typechecks; not driven yet (see driveTaskWithPi).
-import { PiRpcClient } from './pi-rpc.js';
+import { PiRpcClient, type PiRpcEvent } from './pi-rpc.js';
 import { INITIAL_MAPPER_STATE, mapPiEventToStatus, type PiEventLike } from './status-mapper.js';
 
-const USAGE = `pi-room-agent — headless iroh-room worker (scaffold)
+const USAGE = `pi-room-agent — headless iroh-room worker
 
 Usage: npm start -- [options]
 
@@ -141,7 +140,18 @@ export interface WorkerContext {
   dryRun: boolean;
   seenEventIds: Set<string>;
   run: RunFn;
+  piDriverFactory?: PiDriverFactory;
 }
+
+export interface PiTaskDriver {
+  start(): void | Promise<void>;
+  sendPrompt(message: string): Promise<void>;
+  events(): AsyncIterable<PiEventLike>;
+  getLastAssistantText(): Promise<string>;
+  stop(): Promise<void>;
+}
+
+export type PiDriverFactory = (ctx: WorkerContext, task: RoomTask) => PiTaskDriver;
 
 function cliContextFor(config: ResolvedWorkerConfig): CliContext {
   return config.dataDir !== undefined ? { dataDir: config.dataDir } : {};
@@ -199,10 +209,10 @@ export function claimStatusMessage(task: RoomTask): string {
 
 /**
  * Claim one detected task: send the claim message, post `claimed` (progress
- * 5, SPEC §11.2), then hand off to the (stubbed) Pi drive. In dry-run mode
- * this only prints the argv that WOULD run.
+ * 5, SPEC §11.2), then hand off to the Pi drive. In dry-run mode this only
+ * prints the argv that WOULD run.
  */
-function claimAndDrive(ctx: WorkerContext, task: RoomTask): void {
+async function claimAndDrive(ctx: WorkerContext, task: RoomTask): Promise<void> {
   const sendArgs = buildRoomSendArgs(ctx.cli, {
     roomId: ctx.roomId,
     message: claimMessage(task, ctx.config.agentName),
@@ -218,7 +228,7 @@ function claimAndDrive(ctx: WorkerContext, task: RoomTask): void {
     note(`[dry-run] would claim task ${task.id}:`);
     note(`[dry-run]   ${formatArgv(ctx.binPath, sendArgs)}`);
     note(`[dry-run]   ${formatArgv(ctx.binPath, statusArgs)}`);
-    note(`[dry-run]   (then drive Pi over RPC — not implemented yet)`);
+    note(`[dry-run]   (then drive Pi over RPC, mirror lifecycle status, send handoff)`);
     return;
   }
 
@@ -236,51 +246,120 @@ function claimAndDrive(ctx: WorkerContext, task: RoomTask): void {
     note(`posted claimed status (event ${parseStatusEventId(status.stdout) ?? 'unknown'})`);
   }
 
-  driveTaskWithPi(ctx, task);
+  await driveTaskWithPi(ctx, task);
+}
+
+function taskPrompt(task: RoomTask): string {
+  const lines = ['```room-task', `id: ${task.id}`, `type: ${task.type}`, `title: ${task.title}`];
+  if (task.repo !== undefined) lines.push(`repo: ${task.repo}`);
+  if (task.branch !== undefined) lines.push(`branch: ${task.branch}`);
+  if (task.goal !== undefined) lines.push(`goal: ${task.goal}`);
+  if (task.acceptance.length > 0) {
+    lines.push('acceptance:');
+    for (const item of task.acceptance) {
+      lines.push(`  - ${item}`);
+    }
+  }
+  if (task.budget !== undefined) {
+    lines.push('budget:');
+    if (task.budget.maxUsd !== undefined) lines.push(`  max_usd: ${task.budget.maxUsd}`);
+    if (task.budget.maxMinutes !== undefined) lines.push(`  max_minutes: ${task.budget.maxMinutes}`);
+  }
+  for (const [key, value] of Object.entries(task.extra)) {
+    lines.push(`${key}: ${value}`);
+  }
+  lines.push('```');
+  return `/room-implement ${task.id}\n\n${lines.join('\n')}`;
+}
+
+function createDefaultPiDriver(ctx: WorkerContext): PiTaskDriver {
+  const client = new PiRpcClient({ cwd: ctx.config.cwd });
+  return {
+    start: () => client.start(),
+    sendPrompt: (message) => client.sendPrompt(message),
+    events: () => client.events() as AsyncGenerator<PiRpcEvent, void, void>,
+    getLastAssistantText: () => client.getLastAssistantText(),
+    stop: () => client.stop(),
+  };
+}
+
+function postStatus(
+  ctx: WorkerContext,
+  input: { status: string; message?: string; progress?: number; artifactIds?: string[] },
+): boolean {
+  const args = buildAgentStatusArgs(ctx.cli, {
+    roomId: ctx.roomId,
+    status: input.status,
+    message: input.message === undefined ? undefined : truncateBytes(input.message, MAX_STATUS_MESSAGE_BYTES),
+    progress: input.progress,
+    artifactIds: input.artifactIds,
+  });
+  const captured = ctx.run(ctx.binPath, args);
+  if (captured.returncode !== 0) {
+    note(`${input.status} status failed (exit ${captured.returncode}): ${redact(captured.stderr).trim()}`);
+    return false;
+  }
+  note(`posted ${input.status} status (event ${parseStatusEventId(captured.stdout) ?? 'unknown'})`);
+  return true;
 }
 
 /**
- * TODO(scaffold): drive the claimed task with Pi over RPC. The intended
- * wiring (typechecked against pi-rpc.ts and status-mapper.ts, disabled here):
- *
- *   const pi = new PiRpcClient({ cwd: ctx.config.cwd });
- *   pi.start();
- *   await pi.sendPrompt(`/room-implement ${taskBlockText}`); // .pi/prompts/room-implement.md
- *   let state = INITIAL_MAPPER_STATE;
- *   for await (const event of pi.events()) {
- *     const { state: next, transition } = mapPiEventToStatus(state, event as PiEventLike);
- *     state = next;
- *     if (transition !== null) {
- *       ctx.run(ctx.binPath, buildAgentStatusArgs(ctx.cli, {
- *         roomId: ctx.roomId, status: transition.to, message: transition.reason,
- *       }));
- *     }
- *     if (event.type === 'agent_end') break;   // done signal per docs/rpc.md
- *   }
- *   const summary = await pi.getLastAssistantText();
- *   // publishArtifacts(...) then post ready_for_review + final handoff message
- *   await pi.stop();
- *
- * Until that is enabled, post `blocked` so the room can see the claim is not
- * progressing (honest signaling beats a silent stall).
+ * Drive the claimed task through Pi RPC and mirror lifecycle transitions into
+ * agent.status. Artifact publication is still the next slice; for now the
+ * final handoff message carries the assistant summary and no artifact ids.
  */
-function driveTaskWithPi(ctx: WorkerContext, task: RoomTask): void {
-  // Reference the intended collaborators so the sketch above stays typechecked.
-  void PiRpcClient;
-  void mapPiEventToStatus;
-  void INITIAL_MAPPER_STATE;
-  void (null as PiEventLike | null);
+export async function driveTaskWithPi(ctx: WorkerContext, task: RoomTask): Promise<void> {
+  const driver = ctx.piDriverFactory?.(ctx, task) ?? createDefaultPiDriver(ctx);
+  let stopped = false;
+  try {
+    await driver.start();
+    await driver.sendPrompt(taskPrompt(task));
+    let state = INITIAL_MAPPER_STATE;
+    for await (const event of driver.events()) {
+      const mapped = mapPiEventToStatus(state, event);
+      state = mapped.state;
+      if (mapped.transition !== null) {
+        postStatus(ctx, { status: mapped.transition.to, message: mapped.transition.reason });
+      }
+      if (event.type === 'agent_end') {
+        break;
+      }
+    }
 
-  note(`TODO: pi-rpc drive for ${task.id} is not implemented; posting blocked`);
-  const blockedArgs = buildAgentStatusArgs(ctx.cli, {
-    roomId: ctx.roomId,
-    status: 'blocked',
-    message: `task ${truncateBytes(task.id, 256)} claimed by scaffold worker; pi-rpc drive not implemented yet`,
-    progress: 5,
-  });
-  const captured = ctx.run(ctx.binPath, blockedArgs);
-  if (captured.returncode !== 0) {
-    note(`blocked status failed (exit ${captured.returncode}): ${redact(captured.stderr).trim()}`);
+    const summary = truncateBytes(await driver.getLastAssistantText(), MAX_MESSAGE_BODY_BYTES - 512);
+    const handoff = [
+      `Task ${task.id} is ready for review.`,
+      '',
+      'Summary:',
+      summary.trim() === '' ? '(Pi completed without a final assistant summary.)' : summary.trim(),
+      '',
+      'Artifacts: none published by the worker yet.',
+      'Next steps: review the room status trail and repository diff.',
+    ].join('\n');
+    const sent = ctx.run(ctx.binPath, buildRoomSendArgs(ctx.cli, { roomId: ctx.roomId, message: handoff }));
+    if (sent.returncode !== 0) {
+      note(`handoff message for ${task.id} failed (exit ${sent.returncode}): ${redact(sent.stderr).trim()}`);
+    } else {
+      note(`sent handoff for ${task.id} (event ${parseSendEventId(sent.stdout) ?? 'unknown'})`);
+    }
+  } catch (error) {
+    const detail = redact(error instanceof Error ? error.message : String(error)).trim();
+    note(`pi drive for ${task.id} failed: ${detail}`);
+    postStatus(ctx, {
+      status: 'blocked',
+      message: `task ${truncateBytes(task.id, 256)} blocked while driving Pi RPC: ${detail}`,
+      progress: 5,
+    });
+  } finally {
+    try {
+      await driver.stop();
+      stopped = true;
+    } catch (error) {
+      note(`pi driver stop failed for ${task.id}: ${redact(error instanceof Error ? error.message : String(error)).trim()}`);
+    }
+    if (stopped) {
+      note(`pi driver stopped for ${task.id}`);
+    }
   }
 }
 
@@ -309,7 +388,7 @@ function detectTasks(rows: readonly TailRow[]): RoomTask[] {
  * individually guarded. Events are marked seen before acting, so a poison
  * message is not retried forever.
  */
-export function pollOnce(ctx: WorkerContext, actOnNewRows: boolean): boolean {
+export async function pollOnce(ctx: WorkerContext, actOnNewRows: boolean): Promise<boolean> {
   const tailArgs = buildRoomTailArgs(ctx.cli, { roomId: ctx.roomId, limit: TAIL_LIMIT });
   const captured = ctx.run(ctx.binPath, tailArgs);
   if (captured.returncode !== 0) {
@@ -341,11 +420,11 @@ export function pollOnce(ctx: WorkerContext, actOnNewRows: boolean): boolean {
   }
   note(`detected ${tasks.length} room-task block(s)`);
   for (const task of tasks) {
-    // TODO(scaffold): claim-conflict resolution — scan the tail for an
+    // TODO: claim-conflict resolution — scan the tail for an
     // existing claim of task.id by another agent before claiming (out of
-    // scope for MVP per DESIGN.md §12).
+    // scope for MVP per SPEC.md §20 / docs/pi-harness.md Out of scope).
     try {
-      claimAndDrive(ctx, task);
+      await claimAndDrive(ctx, task);
     } catch (error) {
       // Untrusted room content must never kill the worker (or its batch):
       // log, skip this task, keep going. The event is already marked seen.
@@ -370,7 +449,7 @@ export async function primeSeenEvents(
   const sleepFn = options.sleepFn ?? ((ms: number) => sleep(ms));
   let delayMs = options.initialDelayMs ?? 1000;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    if (pollOnce(ctx, false)) {
+    if (await pollOnce(ctx, false)) {
       return true;
     }
     if (attempt < maxAttempts) {
@@ -383,7 +462,7 @@ export async function primeSeenEvents(
 }
 
 /** Dry-run report: resolved config + planned argv; offline tail if possible. */
-function dryRunReport(ctx: WorkerContext | null, config: ResolvedWorkerConfig, binError?: string): void {
+async function dryRunReport(ctx: WorkerContext | null, config: ResolvedWorkerConfig, binError?: string): Promise<void> {
   const cli = cliContextFor(config);
   note('dry-run: nothing will be sent');
   note(`  room:         ${config.roomId ?? '(not set)'}`);
@@ -408,7 +487,7 @@ function dryRunReport(ctx: WorkerContext | null, config: ResolvedWorkerConfig, b
     return;
   }
   // The offline tail is network-free and read-only, so a dry run may execute it.
-  pollOnce(ctx, true);
+  await pollOnce(ctx, true);
 }
 
 export async function main(argv: readonly string[] = process.argv.slice(2)): Promise<void> {
@@ -458,7 +537,7 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
               run: runIrohRooms,
             }
           : null;
-      dryRunReport(ctx, config, binError);
+      await dryRunReport(ctx, config, binError);
     } catch (error) {
       fail(error instanceof Error ? error.message : String(error));
     }
@@ -488,7 +567,7 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
 
   if (args.once) {
     // --once acts on the current backlog (that is its purpose).
-    const ok = pollOnce(ctx, true);
+    const ok = await pollOnce(ctx, true);
     if (!ok) {
       process.exit(1);
     }
@@ -511,7 +590,7 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
   while (running) {
     await sleep(args.pollIntervalSeconds * 1000);
     if (!running) break;
-    pollOnce(ctx, true);
+    await pollOnce(ctx, true);
   }
   note('stopped');
 }

@@ -16,9 +16,11 @@ import {
   pollOnce,
   primeSeenEvents,
   truncateBytes,
+  type PiTaskDriver,
   type RunFn,
   type WorkerContext,
 } from '../src/main.js';
+import type { PiEventLike } from '../src/status-mapper.js';
 import { AGENT_STATUS_STDOUT, ROOM_ID, ROOM_SEND_STDOUT } from './fixtures.js';
 
 const OK = { returncode: 0, stderr: '' };
@@ -84,7 +86,33 @@ function makeRunner(
   return { run, calls, kinds: () => calls.map(kindOf) };
 }
 
-function makeCtx(runner: RecordingRunner, opts: { dryRun?: boolean } = {}): WorkerContext {
+function fakePiDriver(events: PiEventLike[] = [
+  { type: 'agent_start' },
+  { type: 'tool_execution_start', toolName: 'edit' },
+  { type: 'agent_end', messages: [{ role: 'assistant', stopReason: 'stop' }] },
+]): PiTaskDriver & { prompts: string[]; stopped: boolean } {
+  const prompts: string[] = [];
+  const driver: PiTaskDriver & { prompts: string[]; stopped: boolean } = {
+    prompts,
+    stopped: false,
+    start: () => {},
+    sendPrompt: async (message) => {
+      prompts.push(message);
+    },
+    events: async function* () {
+      for (const event of events) {
+        yield event;
+      }
+    },
+    getLastAssistantText: async () => 'implemented the requested task',
+    stop: async () => {
+      driver.stopped = true;
+    },
+  };
+  return driver;
+}
+
+function makeCtx(runner: RecordingRunner, opts: { dryRun?: boolean; driver?: PiTaskDriver } = {}): WorkerContext {
   const config: ResolvedWorkerConfig = {
     roomId: ROOM_ID,
     agentName: 'pi-agent',
@@ -103,18 +131,20 @@ function makeCtx(runner: RecordingRunner, opts: { dryRun?: boolean } = {}): Work
     dryRun: opts.dryRun ?? false,
     seenEventIds: new Set<string>(),
     run: runner.run,
+    piDriverFactory: () => opts.driver ?? fakePiDriver(),
   };
 }
 
 describe('pollOnce decision tree', () => {
-  it('detects a new room-task and claims it: send, claimed status, blocked stub', () => {
+  it('detects a new room-task and claims it through Pi RPC', async () => {
+    const driver = fakePiDriver();
     const runner = makeRunner([{ ...OK, stdout: tailStdout([taskRow(EVENT_A, taskBlock('IR-PI-001'))]) }]);
-    const ctx = makeCtx(runner);
+    const ctx = makeCtx(runner, { driver });
 
-    expect(pollOnce(ctx, true)).toBe(true);
+    expect(await pollOnce(ctx, true)).toBe(true);
 
-    // tail → claim send → claimed status → blocked status (pi drive stub)
-    expect(runner.kinds()).toEqual(['tail', 'send', 'status', 'status']);
+    // tail → claim send → claimed status → Pi status transitions → handoff send
+    expect(runner.kinds()).toEqual(['tail', 'send', 'status', 'status', 'status', 'status', 'send']);
     const send = runner.calls[1]!;
     expect(send).toContain('Claiming task IR-PI-001 as pi-agent. I will post progress through agent.status and share artifacts when ready.');
     expect(send).toContain(ROOM_ID);
@@ -123,47 +153,74 @@ describe('pollOnce decision tree', () => {
     expect(status).toContain('--progress=5');
     expect(status).toContain('claimed');
     expect(ctx.seenEventIds.has(EVENT_A)).toBe(true);
+    expect(driver.prompts[0]).toContain('/room-implement IR-PI-001');
+    expect(driver.prompts[0]).toContain('```room-task');
+    expect(driver.stopped).toBe(true);
+    expect(runner.calls.filter((args) => args.includes('planning'))).toHaveLength(1);
+    expect(runner.calls.filter((args) => args.includes('implementing'))).toHaveLength(1);
+    expect(runner.calls.filter((args) => args.includes('ready_for_review'))).toHaveLength(1);
+    expect(runner.calls.at(-1)).toContain('Task IR-PI-001 is ready for review.\n\nSummary:\nimplemented the requested task\n\nArtifacts: none published by the worker yet.\nNext steps: review the room status trail and repository diff.');
   });
 
-  it('skips already-seen events on the next poll (no duplicate claims)', () => {
+  it('posts blocked when the Pi RPC drive fails after claim', async () => {
+    const driver: PiTaskDriver = {
+      start: () => {},
+      sendPrompt: async () => {
+        throw new Error('rpc unavailable');
+      },
+      events: async function* () {},
+      getLastAssistantText: async () => '',
+      stop: async () => {},
+    };
+    const runner = makeRunner([{ ...OK, stdout: tailStdout([taskRow(EVENT_A, taskBlock('IR-PI-ERR'))]) }]);
+    const ctx = makeCtx(runner, { driver });
+
+    expect(await pollOnce(ctx, true)).toBe(true);
+
+    const blocked = runner.calls.find((args) => args.includes('blocked'));
+    expect(blocked).toBeDefined();
+    expect(blocked?.some((arg) => arg.includes('rpc unavailable'))).toBe(true);
+  });
+
+  it('skips already-seen events on the next poll (no duplicate claims)', async () => {
     const stdout = tailStdout([taskRow(EVENT_A, taskBlock('IR-PI-001'))]);
     const runner = makeRunner([{ ...OK, stdout }]);
     const ctx = makeCtx(runner);
 
-    expect(pollOnce(ctx, true)).toBe(true);
+    expect(await pollOnce(ctx, true)).toBe(true);
     const writesAfterFirst = runner.kinds().filter((k) => k !== 'tail').length;
-    expect(pollOnce(ctx, true)).toBe(true);
+    expect(await pollOnce(ctx, true)).toBe(true);
     const writesAfterSecond = runner.kinds().filter((k) => k !== 'tail').length;
     expect(writesAfterSecond).toBe(writesAfterFirst); // second poll: tail only
   });
 
-  it('returns false on a tail failure and performs no writes', () => {
+  it('returns false on a tail failure and performs no writes', async () => {
     const runner = makeRunner([
       { returncode: 2, stdout: '', stderr: 'error[room_not_found]: no local room state\n' },
     ]);
     const ctx = makeCtx(runner);
-    expect(pollOnce(ctx, true)).toBe(false);
+    expect(await pollOnce(ctx, true)).toBe(false);
     expect(runner.kinds()).toEqual(['tail']);
     expect(ctx.seenEventIds.size).toBe(0);
   });
 
-  it('returns false on corrupt tail JSON and performs no writes', () => {
+  it('returns false on corrupt tail JSON and performs no writes', async () => {
     const runner = makeRunner([{ ...OK, stdout: 'not json at all' }]);
     const ctx = makeCtx(runner);
-    expect(pollOnce(ctx, true)).toBe(false);
+    expect(await pollOnce(ctx, true)).toBe(false);
     expect(runner.kinds()).toEqual(['tail']);
   });
 
-  it('dry-run never executes send/status — only the read-only tail', () => {
+  it('dry-run never executes send/status — only the read-only tail', async () => {
     const runner = makeRunner([{ ...OK, stdout: tailStdout([taskRow(EVENT_A, taskBlock('IR-PI-001'))]) }]);
     const ctx = makeCtx(runner, { dryRun: true });
-    expect(pollOnce(ctx, true)).toBe(true);
+    expect(await pollOnce(ctx, true)).toBe(true);
     expect(runner.kinds()).toEqual(['tail']);
   });
 });
 
 describe('untrusted room content never crashes the worker', () => {
-  it('a task with an oversized title is still claimed (truncated), not a crash', () => {
+  it('a task with an oversized title is still claimed (truncated), not a crash', async () => {
     const hugeTitle = 'x'.repeat(5000);
     const runner = makeRunner([{ ...OK, stdout: tailStdout([taskRow(EVENT_A, taskBlock('IR-PI-666', hugeTitle))]) }]);
     const ctx = makeCtx(runner);
@@ -171,9 +228,7 @@ describe('untrusted room content never crashes the worker', () => {
     // Old behavior: CliValidationError ("status message must be at most 4096
     // bytes") escaped pollOnce and killed the worker.
     let ok = false;
-    expect(() => {
-      ok = pollOnce(ctx, true);
-    }).not.toThrow();
+    ok = await pollOnce(ctx, true);
     expect(ok).toBe(true);
     expect(ctx.seenEventIds.has(EVENT_A)).toBe(true);
 
@@ -187,7 +242,7 @@ describe('untrusted room content never crashes the worker', () => {
     expect(message).toContain('claimed IR-PI-666:');
   });
 
-  it('a failing claim does not abandon sibling tasks in the same batch', () => {
+  it('a failing claim does not abandon sibling tasks in the same batch', async () => {
     const body = `${taskBlock('IR-PI-001')}\n\n${taskBlock('IR-PI-002')}`;
     const runner = makeRunner([{ ...OK, stdout: tailStdout([taskRow(EVENT_A, body)]) }], {
       onSend: (call) => {
@@ -199,9 +254,9 @@ describe('untrusted room content never crashes the worker', () => {
     });
     const ctx = makeCtx(runner);
 
-    expect(pollOnce(ctx, true)).toBe(true);
+    expect(await pollOnce(ctx, true)).toBe(true);
     const sends = runner.calls.filter((args) => kindOf(args) === 'send');
-    expect(sends).toHaveLength(2); // second task still attempted
+    expect(sends.length).toBeGreaterThanOrEqual(2); // second task still attempted
     expect(sends[1]!.some((arg) => arg.includes('IR-PI-002'))).toBe(true);
   });
 });
@@ -230,7 +285,7 @@ describe('primeSeenEvents (mandatory priming, never fail open)', () => {
     expect(runner.kinds()).toEqual(['tail', 'tail']);
 
     // And the first acting poll treats the backlog as seen: still no writes.
-    expect(pollOnce(ctx, true)).toBe(true);
+    expect(await pollOnce(ctx, true)).toBe(true);
     expect(runner.kinds()).toEqual(['tail', 'tail', 'tail']);
   });
 

@@ -13,7 +13,7 @@ loopback previews over private P2P pipes — all by shelling out to the existing
 .pi/extensions/iroh-room/    Pi extension: iroh_* tools + /room* slash commands
 .pi/skills/iroh-room-agent/  Agent skill (SKILL.md + helper scripts)
 .pi/prompts/                 /room-implement, /room-review, /room-debug templates
-tools/pi-room-agent/         Headless worker scaffold (Pi RPC mode)
+tools/pi-room-agent/         Headless worker (Pi RPC mode; integration pending)
 docs/pi-harness.md           Full documentation (setup, config, tools, security)
 .iroh-room-pi.json.example   Config file template
 SPEC.md                      Original implementation specification
@@ -55,14 +55,18 @@ Then assign work by posting a `room-task` fenced block in the room and running
 - [SPEC.md](SPEC.md) — the implementation spec this repo follows.
 
 Status: MVP complete; post-MVP in progress. The interactive extension, skill,
-prompt templates, and Room Pulse TUI are functional and locally tested. The
-headless worker has real config, task parsing, status mapping, room-tail polling,
-and claim plumbing, but remains a tested scaffold until the Pi RPC drive is wired
-end-to-end.
+prompt templates, and Room Pulse TUI are functional and locally tested. Room
+Cockpit is implemented through its read-only phases: full-screen mode, overlay
+mode, and the richer Members / Artifacts / Pipes / Settings tabs. Confirmed
+Cockpit mutations are not implemented yet. The headless worker has real config,
+task parsing, status mapping, room-tail polling, claim plumbing, and an
+injectable Pi RPC drive that is unit-tested. It still needs real Pi/iroh-room
+integration coverage plus artifact publication before it should be treated as
+production-ready.
 
 Quality gates: CI runs `npm ci`, `npm run typecheck`, and `npm test` for both
 `.pi/extensions/iroh-room` and `tools/pi-room-agent`.
 
 Not implemented (by design, for now): `iroh_file_fetch`, live tail streaming,
-Pi RPC task execution in the worker, task scheduling, budget enforcement,
+real Pi RPC integration coverage, task scheduling, budget enforcement,
 sandboxing, SDK-native integration, and multi-agent coordination.
