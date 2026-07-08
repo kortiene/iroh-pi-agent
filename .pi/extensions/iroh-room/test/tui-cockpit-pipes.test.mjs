@@ -55,14 +55,15 @@ function makeComponent(snap) {
 	});
 }
 
-test("pipes is a registered tab reachable by hotkey 5 (health moves to 6)", () => {
-	assert.deepEqual([...COCKPIT_TABS], ["overview", "timeline", "tasks", "members", "pipes", "health"]);
-	assert.equal(cockpitKeys.tabFor("5"), "pipes");
-	assert.equal(cockpitKeys.tabFor("6"), "health");
+test("pipes is a registered tab reachable by hotkey 6 (artifacts 5, health 7)", () => {
+	assert.deepEqual([...COCKPIT_TABS], ["overview", "timeline", "tasks", "members", "artifacts", "pipes", "health"]);
+	assert.equal(cockpitKeys.tabFor("5"), "artifacts");
+	assert.equal(cockpitKeys.tabFor("6"), "pipes");
+	assert.equal(cockpitKeys.tabFor("7"), "health");
 	const component = makeComponent(snapshot());
-	component.handleInput("5");
+	component.handleInput("6");
 	const body = component.render(100).join("\n");
-	assert.ok(body.includes("Pipes"), "pipes section title renders on tab 5");
+	assert.ok(body.includes("Pipes"), "pipes section title renders on tab 6");
 	assert.ok(body.includes("PIPES"), "pipes header renders");
 });
 
@@ -123,7 +124,7 @@ test("pipes renderer shows columns, trusted-local source, and selected inspector
 
 test("selection can move and exposes pipe label/age in the inspector", () => {
 	const component = makeComponent(snapshot());
-	component.handleInput("5");
+	component.handleInput("6");
 	component.handleInput("down");
 	const body = component.render(100).join("\n");
 	assert.ok(body.includes("preview"), "selected second pipe label is shown");
@@ -132,7 +133,7 @@ test("selection can move and exposes pipe label/age in the inspector", () => {
 
 test("selection is clamped and never throws at degenerate widths", () => {
 	const component = makeComponent(snapshot());
-	component.handleInput("5");
+	component.handleInput("6");
 	for (let i = 0; i < 10; i++) component.handleInput("down");
 	for (let i = 0; i < 10; i++) component.handleInput("up");
 	for (const width of [120, 80, 40, 20, 8, 1]) {

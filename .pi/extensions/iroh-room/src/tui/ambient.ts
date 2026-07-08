@@ -34,6 +34,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { AutocompleteProvider } from "@earendil-works/pi-tui";
 
 import {
+	buildFileListArgs,
 	buildMembersArgs,
 	buildTailArgs,
 	buildWhoamiArgs,
@@ -216,6 +217,7 @@ function fileSummaryFromRow(row: TailRow): FileSummary | undefined {
 	const file: FileSummary = {};
 	if (typeof row.file_id === "string") file.id = row.file_id;
 	else if (typeof row.blob_hash === "string") file.id = row.blob_hash;
+	if (typeof row.blob_hash === "string") file.blobHash = row.blob_hash;
 	if (typeof row.file_name === "string") file.name = row.file_name;
 	if (typeof row.name === "string" && file.name === undefined) file.name = row.name;
 	if (typeof row.size_bytes === "number") file.sizeBytes = row.size_bytes;
@@ -280,6 +282,8 @@ export class AmbientController implements AmbientLike {
 	 * cockpit Members tab reads this. Kept parallel to `members` so the
 	 * completions/mentions roster (id->role) shape never changes. */
 	private memberMeta: Map<string, { status?: string; isAdmin?: boolean }> | undefined;
+	/** blob_hash/file_id -> details from file list --json, fetched on manual refresh. */
+	private fileDetails: Map<string, FileSummary> | undefined;
 	/** Pipe ids whose disappearance is OURS (tool/command close) — no toast.
 	 * Entries are consumed on the first matching disappearance; an entry for
 	 * a close that ultimately failed lingers and suppresses at most one later
@@ -509,7 +513,8 @@ export class AmbientController implements AmbientLike {
 		const latestRow = this.currentRows[this.currentRows.length - 1] ?? feed.latestRow;
 		const files = this.currentRows
 			.map((row) => fileSummaryFromRow(row))
-			.filter((file): file is FileSummary => file !== undefined);
+			.filter((file): file is FileSummary => file !== undefined)
+			.map((file) => this.enrichFileSummary(file));
 		const unclaimed = this.tracker.unclaimed().map((task) => taskSummary(task, "backlog"));
 		const claimed = this.tracker.claimed().map((task) => taskSummary(task, "claimed"));
 		const readyForReview = this.tracker.readyForReview().map((task) => taskSummary(task, "ready_for_review"));
@@ -842,6 +847,12 @@ export class AmbientController implements AmbientLike {
 			memberJoined = diff.joined;
 			memberRemoved = diff.removed;
 		}
+		if (manual) {
+			await this.pollFiles(epoch, exec, bin, cfg, manual);
+			if (!this.pollValid(epoch, manual)) {
+				return;
+			}
+		}
 		// Classify BEFORE ingesting fresh rows so task_new dedupes against the
 		// pre-tick tracked set; then track (self-authored tasks still count).
 		const toasts = this.classifier.classify({
@@ -963,6 +974,73 @@ export class AmbientController implements AmbientLike {
 		return {
 			joined: [...next.keys()].filter((id) => !prev.has(id)),
 			removed: [...prev.keys()].filter((id) => !next.has(id)),
+		};
+	}
+
+	/**
+	 * `file list --json`, parsed DEFENSIVELY and only on manual cockpit refresh.
+	 * File rows are convenience metadata for the Artifacts tab; failures are
+	 * silent and never feed health. Key by both blob_hash and file_id so a tail
+	 * file.shared row with only blob_hash can still gain its file_... id.
+	 */
+	private async pollFiles(
+		epoch: number,
+		exec: ExecFn,
+		bin: string,
+		cfg: ResolvedConfig,
+		manual = false,
+	): Promise<void> {
+		let parsed: unknown;
+		try {
+			const run = await runCli(exec, bin, buildFileListArgs({ room: cfg.roomId as string }), {
+				...(cfg.home !== undefined ? { home: cfg.home } : {}),
+				cwd: cfg.cwd,
+			});
+			if (!this.pollValid(epoch, manual) || !run.ok) {
+				return;
+			}
+			parsed = parseJsonLine<unknown>(run.stdout, "file list");
+		} catch {
+			return;
+		}
+		if (!Array.isArray(parsed)) {
+			return;
+		}
+		const next = new Map<string, FileSummary>();
+		for (const entry of parsed) {
+			if (entry === null || typeof entry !== "object") {
+				continue;
+			}
+			const record = entry as { file_id?: unknown; name?: unknown; size_bytes?: unknown; mime?: unknown; provider?: unknown; blob_hash?: unknown };
+			const file: FileSummary = {};
+			if (typeof record.file_id === "string") file.id = record.file_id;
+			if (typeof record.blob_hash === "string") file.blobHash = record.blob_hash;
+			if (typeof record.name === "string") file.name = record.name;
+			if (typeof record.size_bytes === "number") file.sizeBytes = record.size_bytes;
+			if (typeof record.mime === "string") file.mime = record.mime;
+			if (typeof record.provider === "string") file.provider = record.provider;
+			if (Object.keys(file).length === 0) {
+				continue;
+			}
+			if (file.id !== undefined) next.set(file.id, file);
+			if (file.blobHash !== undefined) next.set(file.blobHash, file);
+		}
+		this.fileDetails = next;
+	}
+
+	private enrichFileSummary(file: FileSummary): FileSummary {
+		const details = this.fileDetails?.get(file.id ?? "") ?? this.fileDetails?.get(file.blobHash ?? "");
+		if (details === undefined) {
+			return file;
+		}
+		return {
+			...file,
+			...(details.id !== undefined ? { id: details.id } : {}),
+			...(details.blobHash !== undefined ? { blobHash: details.blobHash } : {}),
+			...(file.name === undefined && details.name !== undefined ? { name: details.name } : {}),
+			...(file.sizeBytes === undefined && details.sizeBytes !== undefined ? { sizeBytes: details.sizeBytes } : {}),
+			...(file.mime === undefined && details.mime !== undefined ? { mime: details.mime } : {}),
+			...(file.provider === undefined && details.provider !== undefined ? { provider: details.provider } : {}),
 		};
 	}
 
@@ -1150,6 +1228,7 @@ export class AmbientController implements AmbientLike {
 		this.tailSuccessCount = 0;
 		this.members = undefined;
 		this.memberMeta = undefined;
+		this.fileDetails = undefined;
 		this.expectedCloses.clear();
 		this.prevPipeIds = undefined;
 		this.tailLook = undefined;

@@ -6,7 +6,7 @@
  * roomText() before display.
  */
 
-export const COCKPIT_TABS = ["overview", "timeline", "tasks", "members", "pipes", "health"] as const;
+export const COCKPIT_TABS = ["overview", "timeline", "tasks", "members", "artifacts", "pipes", "health"] as const;
 
 export type CockpitTab = (typeof COCKPIT_TABS)[number];
 
@@ -46,6 +46,7 @@ export interface MemberSummary {
 
 export interface FileSummary {
 	id?: string;
+	blobHash?: string;
 	name?: string;
 	sizeBytes?: number;
 	mime?: string;

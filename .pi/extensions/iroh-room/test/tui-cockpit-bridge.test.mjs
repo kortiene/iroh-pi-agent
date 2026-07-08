@@ -15,7 +15,7 @@ import { join } from "node:path";
 import { after, test } from "node:test";
 
 import { loadExtension, stubCtx, stubExec, stubTimers } from "./helpers.mjs";
-import { ERROR_STDERR_ROOM, IDENTITY_AGENT, IDENTITY_JSON, MEMBERS_JSON, ROOM_ID, TAIL_ROWS, TAIL_JSON, fail, ok } from "./fixtures.mjs";
+import { ERROR_STDERR_ROOM, FILE_LIST_JSON, IDENTITY_AGENT, IDENTITY_JSON, MEMBERS_JSON, ROOM_ID, TAIL_ROWS, TAIL_JSON, fail, ok } from "./fixtures.mjs";
 
 const ext = await loadExtension();
 const { AmbientController } = await ext.importModule("tui/ambient");
@@ -95,9 +95,10 @@ test("requestRefresh is single-flight: a concurrent refresh reuses the in-flight
 		ok(TAIL_JSON),
 		// manual-refresh tail poll blocks on the gate so we can race a 2nd call
 		() => gate.promise.then(() => ok(TAIL_JSON)),
-		// Members tab: manual refresh updates the roster immediately after the
-		// single tail poll; this is not a second room-tail loop.
+		// Members/Artifacts tabs: manual refresh updates roster/file metadata
+		// immediately after the single tail poll; this is not a second room-tail loop.
 		ok(MEMBERS_JSON),
+		ok(FILE_LIST_JSON),
 	]);
 	assert.equal(calls.length, 2);
 
@@ -111,9 +112,10 @@ test("requestRefresh is single-flight: a concurrent refresh reuses the in-flight
 
 	gate.resolve();
 	await Promise.all([r1, r2]);
-	assert.equal(calls.length, 4, "one manual tail poll plus one immediate members poll after both awaits resolve");
+	assert.equal(calls.length, 5, "one manual tail poll plus immediate members/file metadata polls after both awaits resolve");
 	assert.equal(calls.filter((call) => call.args[0] === "room" && call.args[1] === "tail").length, 2, "init tail + one manual tail only");
 	assert.equal(calls.filter((call) => call.args[0] === "room" && call.args[1] === "members").length, 1, "single roster poll after manual refresh");
+	assert.equal(calls.filter((call) => call.args[0] === "file" && call.args[1] === "list").length, 1, "single file metadata poll after manual refresh");
 	// After the manual poll completes it re-arms the ambient chain (no leak).
 	assert.equal(shim.pending(), 1, "exactly one chained timer after refresh");
 });

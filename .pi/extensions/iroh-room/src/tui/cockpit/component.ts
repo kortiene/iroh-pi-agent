@@ -1,6 +1,7 @@
 /** Focused full-screen Room Cockpit component (read-only Phase 1). */
 
 import type { FitFn, Styler } from "../style.js";
+import { renderArtifacts } from "./artifacts.js";
 import { renderHealth } from "./health.js";
 import {
 	borderBottom,
@@ -49,6 +50,7 @@ export class CockpitComponent {
 		timeline: 0,
 		tasks: 0,
 		members: 0,
+		artifacts: 0,
 		pipes: 0,
 		health: 0,
 	};
@@ -209,6 +211,8 @@ export class CockpitComponent {
 				return Math.max(0, this.snapshot.tasks.all.length - 1);
 			case "members":
 				return Math.max(0, this.snapshot.members.length - 1);
+			case "artifacts":
+				return Math.max(0, this.snapshot.files.length - 1);
 			case "pipes":
 				return Math.max(0, this.snapshot.pipes.length - 1);
 			default:
@@ -230,6 +234,8 @@ export class CockpitComponent {
 				return renderTasks(this.snapshot, kit, this.selected.tasks);
 			case "members":
 				return renderMembers(this.snapshot, kit, this.selected.members);
+			case "artifacts":
+				return renderArtifacts(this.snapshot, kit, this.selected.artifacts);
 			case "pipes":
 				return renderPipes(this.snapshot, kit, this.selected.pipes);
 			case "health":
@@ -251,7 +257,7 @@ export class CockpitComponent {
 			row("esc / q", "close the cockpit"),
 			row("?", "toggle this help"),
 			row("tab / ⇧tab", "next / previous tab"),
-			row("1-6", "jump to overview / timeline / tasks / members / pipes / health"),
+			row("1-7", "jump to overview / timeline / tasks / members / artifacts / pipes / health"),
 			row("↑ ↓", "move the selection"),
 			row("↵", "inspect the selected row"),
 			row("r", "refresh through the ambient poll path"),
@@ -270,6 +276,7 @@ export class CockpitComponent {
 			timeline: "Timeline",
 			tasks: `Tasks~ ${this.snapshot.tasks.unclaimed.length}`,
 			members: `Members ${this.snapshot.members.length}`,
+			artifacts: `Artifacts ${this.snapshot.files.length}`,
 			pipes: `Pipes ${this.snapshot.pipes.length}`,
 			health: "Health",
 		};

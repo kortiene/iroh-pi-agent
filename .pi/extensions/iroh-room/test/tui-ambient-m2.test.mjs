@@ -18,6 +18,7 @@ import {
 	IDENTITY_ADMIN,
 	IDENTITY_AGENT,
 	IDENTITY_JSON,
+	FILE_LIST_JSON,
 	PIPE_ID,
 	ROOM_ID,
 	TAIL_ROWS,
@@ -175,13 +176,15 @@ test("members poll: manual refresh polls the roster immediately, not only every 
 		ok(TAIL_JSON),
 		ok(TAIL_JSON),
 		ok(membersJson([IDENTITY_ADMIN, IDENTITY_AGENT])),
+		ok(FILE_LIST_JSON),
 	]);
 	const ctx = tuiCtx();
 	await startController(controller, shim, ctx);
 	assert.equal(calls.length, 2, "init tick is identity + tail only");
 	await controller.requestRefresh();
-	assert.equal(calls.length, 4, "manual refresh performs tail + immediate members poll");
+	assert.equal(calls.length, 5, "manual refresh performs tail + immediate members/file polls");
 	assert.deepEqual(calls[3].args, MEMBERS_ARGS);
+	assert.deepEqual(calls[4].args, ["file", "list", "--json", "--", ROOM_ID]);
 	assert.deepEqual(
 		controller.getSnapshot().members.map((member) => member.id).sort(),
 		[IDENTITY_ADMIN, IDENTITY_AGENT].sort(),

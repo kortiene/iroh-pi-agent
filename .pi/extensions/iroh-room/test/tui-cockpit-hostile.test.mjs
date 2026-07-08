@@ -89,7 +89,7 @@ test("real hostile corpus survives getSnapshot() → cockpit render on every tab
 		requestRender: () => {},
 	});
 
-	for (const tab of ["1", "2", "3", "4", "5", "6"]) {
+	for (const tab of ["1", "2", "3", "4", "5", "6", "7"]) {
 		component.handleInput(tab);
 		for (const width of [120, 80, 60, 40, 20, 8, 1]) {
 			let lines;
@@ -129,8 +129,14 @@ test("hostile inspector rows (selection) stay sanitized on timeline and tasks", 
 		assertClean(component.render(80), `members inspector sel=${i}`);
 		component.handleInput("down");
 	}
-	// Pipes: walk the selection across active local pipes (may be empty here).
+	// Artifacts: walk the selection across shared files (may be empty here).
 	component.handleInput("5");
+	for (let i = 0; i < Math.max(1, snapshot.files.length) + 2; i++) {
+		assertClean(component.render(80), `artifacts inspector sel=${i}`);
+		component.handleInput("down");
+	}
+	// Pipes: walk the selection across active local pipes (may be empty here).
+	component.handleInput("6");
 	for (let i = 0; i < Math.max(1, snapshot.pipes.length) + 2; i++) {
 		assertClean(component.render(80), `pipes inspector sel=${i}`);
 		component.handleInput("down");
@@ -194,8 +200,39 @@ test("hostile pipe labels stay sanitized on the pipes tab", () => {
 		onRefresh: async () => {},
 		requestRender: () => {},
 	});
-	component.handleInput("5");
+	component.handleInput("6");
 	for (const width of [120, 80, 40, 20, 8, 1]) {
 		assertClean(component.render(width), `pipes hostile width=${width}`);
+	}
+});
+
+test("hostile artifact metadata stays sanitized on the artifacts tab", () => {
+	const HOSTILE = "\u001b[31mred\u001b[0m \u202Eevil roomtkt1qpzry9x8gf2tvdw0";
+	const snapshot = {
+		config: { roomId: ROOM_ID },
+		identity: { name: "pi-agent", identityId: "a".repeat(64), from8: "aaaaaaaa" },
+		feed: { state: "ok", lastOkAt: Date.now(), gap: false },
+		latest: {},
+		tasks: { all: [], unclaimed: [], claimed: [], readyForReview: [], done: [] },
+		members: [],
+		files: [
+			{ id: "file_" + "a".repeat(32), blobHash: "blake3:" + "b".repeat(64), name: HOSTILE, sizeBytes: 1234, mime: HOSTILE, provider: HOSTILE },
+		],
+		pipes: [],
+		events: [],
+	};
+	const component = new CockpitComponent({
+		snapshot,
+		styler: identityStyler,
+		fit: naiveFit,
+		keys: cockpitKeys,
+		getHeight: () => 24,
+		onClose: () => {},
+		onRefresh: async () => {},
+		requestRender: () => {},
+	});
+	component.handleInput("5");
+	for (const width of [120, 80, 40, 20, 8, 1]) {
+		assertClean(component.render(width), `artifacts hostile width=${width}`);
 	}
 });
