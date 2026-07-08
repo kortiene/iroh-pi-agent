@@ -5,6 +5,10 @@
  * (entry-point guard); the fact this file runs at all proves it.
  */
 
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
 import type { ResolvedWorkerConfig } from '../src/config.js';
@@ -21,7 +25,7 @@ import {
   type WorkerContext,
 } from '../src/main.js';
 import type { PiEventLike } from '../src/status-mapper.js';
-import { AGENT_STATUS_STDOUT, ROOM_ID, ROOM_SEND_STDOUT } from './fixtures.js';
+import { AGENT_STATUS_STDOUT, FILE_ID, FILE_SHARE_STDOUT, ROOM_ID, ROOM_SEND_STDOUT } from './fixtures.js';
 
 const OK = { returncode: 0, stderr: '' };
 
@@ -49,6 +53,7 @@ function kindOf(args: readonly string[]): string {
   if (args.includes('tail')) return 'tail';
   if (args.includes('send')) return 'send';
   if (args.includes('status')) return 'status';
+  if (args.includes('file') && args.includes('share')) return 'file-share';
   return args.join(' ');
 }
 
@@ -85,6 +90,9 @@ function makeRunner(
       }
       return { ...OK, stdout: ROOM_SEND_STDOUT };
     }
+    if (kind === 'file-share') {
+      return { ...OK, stdout: FILE_SHARE_STDOUT };
+    }
     return { ...OK, stdout: AGENT_STATUS_STDOUT };
   };
   return { run, calls, kinds: () => calls.map(kindOf) };
@@ -116,16 +124,17 @@ function fakePiDriver(events: PiEventLike[] = [
   return driver;
 }
 
-function makeCtx(runner: RecordingRunner, opts: { dryRun?: boolean; driver?: PiTaskDriver } = {}): WorkerContext {
+function makeCtx(runner: RecordingRunner, opts: { dryRun?: boolean; driver?: PiTaskDriver; cwd?: string } = {}): WorkerContext {
+  const cwd = opts.cwd ?? '/w';
   const config: ResolvedWorkerConfig = {
     roomId: ROOM_ID,
     agentName: 'pi-agent',
-    artifactDir: '/w/artifacts',
+    artifactDir: resolve(cwd, 'artifacts'),
     defaultPreviewHost: '127.0.0.1',
     defaultPreviewPort: 3000,
     allowedPreviewMembers: [],
     allowArtifactPathsOutsideWorkspace: false,
-    cwd: '/w',
+    cwd,
   };
   return {
     config,
@@ -164,6 +173,27 @@ describe('pollOnce decision tree', () => {
     expect(runner.calls.filter((args) => args.includes('implementing'))).toHaveLength(1);
     expect(runner.calls.filter((args) => args.includes('ready_for_review'))).toHaveLength(1);
     expect(runner.calls.at(-1)).toContain('Task IR-PI-001 is ready for review.\n\nOutcome:\nPi completed successfully.\n\nSummary:\nimplemented the requested task\n\nArtifacts: none published by the worker yet.\nNext steps: review the room status trail and repository diff.');
+  });
+
+  it('publishes task-named artifacts on successful Pi completion', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'pi-room-agent-main-'));
+    try {
+      const taskId = 'IR-PI-ARTIFACT';
+      mkdirSync(join(cwd, 'artifacts', 'worker'), { recursive: true });
+      writeFileSync(join(cwd, 'artifacts', 'worker', `${taskId}.md`), '# smoke artifact\n');
+      const runner = makeRunner([{ ...OK, stdout: tailStdout([taskRow(EVENT_A, taskBlock(taskId))]) }]);
+      const ctx = makeCtx(runner, { cwd });
+
+      expect(await pollOnce(ctx, true)).toBe(true);
+
+      expect(runner.kinds()).toContain('file-share');
+      const artifactStatus = runner.calls.find((args) => args.includes(`--artifact=${FILE_ID}`));
+      expect(artifactStatus).toBeDefined();
+      expect(artifactStatus).toContain('ready_for_review');
+      expect(runner.calls.at(-1)?.some((arg) => arg.includes(`Artifacts:\n- ${FILE_ID}`))).toBe(true);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
   });
 
   it('does not send a ready-for-review handoff when Pi ends failed', async () => {

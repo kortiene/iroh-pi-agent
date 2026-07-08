@@ -20,10 +20,12 @@
  * primeSeenEvents/parseCliArgs without side effects.
  */
 
-import { realpathSync } from 'node:fs';
+import { existsSync, readdirSync, realpathSync, statSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { pathToFileURL } from 'node:url';
 
+import { publishArtifacts } from './artifact-publisher.js';
 import { ConfigError, requireRoomId, resolveIrohRoomsBin, resolveWorkerConfig, type ResolvedWorkerConfig } from './config.js';
 import {
   buildAgentStatusArgs,
@@ -372,10 +374,53 @@ function diagnosticsBlock(lines: readonly string[]): string[] {
   return ['Diagnostics:', ...lines.slice(-8).map((line) => `- ${truncateBytes(redact(line), 400)}`)];
 }
 
+function repoRootFor(config: ResolvedWorkerConfig): string {
+  if (config.cwd.endsWith('/tools/pi-room-agent')) {
+    return resolve(config.cwd, '..', '..');
+  }
+  return config.cwd;
+}
+
+function walkFiles(root: string, out: string[], remaining: { count: number }): void {
+  if (remaining.count <= 0 || !existsSync(root)) return;
+  let stat;
+  try {
+    stat = statSync(root);
+  } catch {
+    return;
+  }
+  if (stat.isFile()) {
+    out.push(root);
+    remaining.count -= 1;
+    return;
+  }
+  if (!stat.isDirectory()) return;
+  let entries: string[];
+  try {
+    entries = readdirSync(root);
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    if (remaining.count <= 0) return;
+    walkFiles(resolve(root, entry), out, remaining);
+  }
+}
+
+function discoverTaskArtifacts(ctx: WorkerContext, task: RoomTask): string[] {
+  const repoRoot = repoRootFor(ctx.config);
+  const roots = [...new Set([ctx.config.artifactDir, resolve(repoRoot, 'artifacts')])];
+  const files: string[] = [];
+  for (const root of roots) {
+    walkFiles(root, files, { count: 200 });
+  }
+  return [...new Set(files)].filter((path) => path.includes(task.id)).sort();
+}
+
 /**
- * Drive the claimed task through Pi RPC and mirror lifecycle transitions into
- * agent.status. Artifact publication is still the next slice; for now the
- * final handoff message carries the assistant summary and no artifact ids.
+ * Drive the claimed task through Pi RPC, mirror lifecycle transitions into
+ * agent.status, publish task-named artifacts under artifacts/, and send a
+ * final handoff.
  */
 export async function driveTaskWithPi(ctx: WorkerContext, task: RoomTask): Promise<void> {
   const driver = ctx.piDriverFactory?.(ctx, task) ?? createDefaultPiDriver(ctx);
@@ -402,6 +447,44 @@ export async function driveTaskWithPi(ctx: WorkerContext, task: RoomTask): Promi
 
     const summary = truncateBytes(await driver.getLastAssistantText(), MAX_MESSAGE_BODY_BYTES - 512);
     const reviewable = state.status === 'ready_for_review';
+    const artifactFiles = reviewable ? discoverTaskArtifacts(ctx, task) : [];
+    const repoRoot = repoRootFor(ctx.config);
+    if (reviewable && artifactFiles.length > 0) {
+      postStatus(ctx, {
+        status: 'sharing_artifacts',
+        message: `sharing ${artifactFiles.length} artifact(s) for ${task.id}`,
+        progress: 90,
+      });
+    }
+    const published = reviewable && artifactFiles.length > 0
+      ? publishArtifacts(artifactFiles, {
+          binPath: ctx.binPath,
+          dataDir: ctx.cli.dataDir,
+          roomId: ctx.roomId,
+          runner: ctx.run,
+          workspace: {
+            cwd: repoRoot,
+            artifactDir: resolve(repoRoot, 'artifacts'),
+            allowOutsideWorkspace: ctx.config.allowArtifactPathsOutsideWorkspace,
+          },
+        })
+      : { shared: [], fileIds: [], errors: [] };
+    if (reviewable && published.fileIds.length > 0) {
+      postStatus(ctx, {
+        status: 'ready_for_review',
+        message: `task ${task.id} ready for review with ${published.fileIds.length} artifact(s)`,
+        progress: 100,
+        artifactIds: published.fileIds,
+      });
+    }
+    const artifactLines =
+      published.fileIds.length > 0
+        ? ['Artifacts:', ...published.fileIds.map((id) => `- ${id}`)]
+        : ['Artifacts: none published by the worker yet.'];
+    const publishErrorLines =
+      published.errors.length > 0
+        ? ['', 'Artifact publish errors:', ...published.errors.map((error) => `- ${truncateBytes(redact(error), 400)}`)]
+        : [];
     const handoff = [
       reviewable ? `Task ${task.id} is ready for review.` : `Task ${task.id} is not ready for review.`,
       '',
@@ -412,7 +495,8 @@ export async function driveTaskWithPi(ctx: WorkerContext, task: RoomTask): Promi
       summary.trim() === '' ? '(Pi completed without a final assistant summary.)' : summary.trim(),
       '',
       ...(reviewable ? [] : [...diagnosticsBlock(diagnostics), '']),
-      'Artifacts: none published by the worker yet.',
+      ...artifactLines,
+      ...publishErrorLines,
       reviewable
         ? 'Next steps: review the room status trail and repository diff.'
         : 'Next steps: inspect the failed/blocked status trail and rerun after fixing the cause.',
